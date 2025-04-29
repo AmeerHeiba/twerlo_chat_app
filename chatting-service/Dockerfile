@@ -1,5 +1,8 @@
 FROM golang:1.24
 
+# Install postgres client for health checks
+RUN apt-get update && apt-get install -y postgresql-client
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -7,10 +10,8 @@ RUN go mod download
 
 COPY . .
 
-# Build to /app/main (consistent with WORKDIR)
 RUN go build -o /app/main ./cmd/api
 
 EXPOSE 8080
 
-# Execute from the working directory
 CMD ["./main"]

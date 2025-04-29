@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/middleware"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 )
@@ -45,6 +47,9 @@ func main() {
 			"message": "Chatting Service is running 🚀",
 		})
 	})
+
+	shared.InitLogger(os.Getenv("APP_ENV"))
+	app.Use(middleware.ErrorHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

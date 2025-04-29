@@ -1,0 +1,12 @@
+[build]
+cmd = "go build -o ./tmp/main ./cmd/api/main.go"
+bin = "./tmp/main"
+include_ext = ["go", "env"]
+exclude_dir = ["vendor", "tmp"]
+delay = 1000
+
+[log]
+color = true
+
+[runner]
+pre_cmd = ["echo 'Rebuilding...'"]

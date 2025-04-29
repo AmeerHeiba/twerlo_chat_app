@@ -1,0 +1,10 @@
+{
+    "docker.composeFile": "${workspaceFolder}/docker-compose.yml",
+    "docker.service": "app",
+    "go.toolsManagement.autoUpdate": true,
+    "go.useLanguageServer": true,
+    "go.lintTool": "golangci-lint",
+    "go.formatTool": "goimports",
+    "files.autoSave": "onFocusChange",
+    "go.testFlags": ["-v", "-count=1"]
+  }

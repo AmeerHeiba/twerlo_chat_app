@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chatting_service
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    command: dlv debug ./cmd/api/main.go --headless --listen=:2345 --api-version=2 --log --output=/tmp/__debug_bin
+    ports:
+      - "8080:8080"
+      - "2345:2345"
+    volumes:
+      - ./:/app
+    environment:
+      - APP_ENV=development
+      - DELVE=true
+
+volumes:
+  postgres_data:

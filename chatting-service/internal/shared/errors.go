@@ -17,6 +17,9 @@ const (
 
 // Domain Errors (Business Rules)
 var (
+	ErrUsernameTooShort   = errors.New("user name should be longer than 3 letters")
+	ErrInvalidEmail       = errors.New("invalid email")
+	ErrWeakPassword       = errors.New("password must be at least 8 characters")
 	ErrUserNotFound       = errors.New("user not found")
 	ErrUserAlreadyExists  = errors.New("user already exists")
 	ErrInvalidCredentials = errors.New("invalid credentials")
@@ -24,7 +27,6 @@ var (
 
 // Application Errors (Use Cases)
 var (
-	ErrWeakPassword   = errors.New("password must be at least 8 characters")
 	ErrMessageTooLong = errors.New("message exceeds 1000 characters")
 )
 

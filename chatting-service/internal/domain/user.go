@@ -1,7 +1,11 @@
 package domain
 
 import (
+	"strings"
 	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"golang.org/x/crypto/bcrypt"
 
 	"gorm.io/gorm"
 )
@@ -20,11 +24,51 @@ type User struct {
 	Broadcasts       []Message `gorm:"foreignKey:BroadcasterID"`
 }
 
-//Value Objects
+//Value Objects and Bussiness rules for user "behaviour of user object"
 
 // BeforeCreate sets the LastActiveAt field to the current time
 // before a new User record is created in the database.
 func (u *User) BeforeCreate(tx *gorm.DB) error {
-	u.LastActiveAt = time.Now()
+	u.UpdateLastActive()
+	return u.Validate()
+}
+
+// BeforeUpdate GORM hook for pre-update validation
+func (u *User) BeforeUpdate(tx *gorm.DB) error {
+	return u.Validate()
+}
+
+// check user rules for user critical fields validty
+func (u *User) Validate() error {
+	switch {
+	case len(u.Username) < 3:
+		return shared.ErrUsernameTooShort
+	case !strings.Contains(u.Email, "@") || !strings.Contains(u.Email, "."):
+		return shared.ErrInvalidEmail
+	case u.PasswordHash == "" || len(u.PasswordHash) < 8:
+		return shared.ErrWeakPassword
+	}
 	return nil
+}
+
+// SetPassword securely hashes and stores password
+func (u *User) SetPassword(plainText string) error {
+	if len(plainText) < 8 {
+		return shared.ErrWeakPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainText), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = string(hash)
+	return nil
+}
+
+// CheckPassword verifies against stored hash
+func (u *User) CheckPassword(plainText string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(plainText))
+	return err == nil
+}
+func (u *User) UpdateLastActive() {
+	u.LastActiveAt = time.Now().UTC()
 }

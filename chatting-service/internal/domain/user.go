@@ -20,9 +20,10 @@ type User struct {
 	Broadcasts       []Message `gorm:"foreignKey:BroadcasterID"`
 }
 
+//Value Objects
+
 // BeforeCreate sets the LastActiveAt field to the current time
 // before a new User record is created in the database.
-
 func (u *User) BeforeCreate(tx *gorm.DB) error {
 	u.LastActiveAt = time.Now()
 	return nil

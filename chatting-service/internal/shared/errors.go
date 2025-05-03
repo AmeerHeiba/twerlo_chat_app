@@ -5,6 +5,16 @@ import (
 	"net/http"
 )
 
+// Error Codes (Machine-readable)
+const (
+	CodeUserNotFound = "USER_NOT_FOUND"
+	CodeUserExists   = "USER_EXISTS"
+	CodeInvalidCreds = "INVALID_CREDENTIALS"
+	CodeWeakPassword = "WEAK_PASSWORD"
+	CodeDBConnection = "DB_CONNECTION_FAILED"
+	CodeInternal     = "INTERNAL_ERROR"
+)
+
 // Domain Errors (Business Rules)
 var (
 	ErrUserNotFound       = errors.New("user not found")
@@ -26,19 +36,43 @@ var (
 
 // HTTP Error Responses
 type HTTPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Status  int         `json:"status"`
+	Code    string      `json:"code"`
+	Message string      `json:"message"`
+	Details interface{} `json:"details,omitempty"`
 }
 
 func ToHTTPError(err error) HTTPError {
-	switch err {
-	case ErrUserNotFound:
-		return HTTPError{http.StatusNotFound, "User not found"}
-	case ErrUserAlreadyExists:
-		return HTTPError{http.StatusConflict, "Username taken"}
-	case ErrWeakPassword:
-		return HTTPError{http.StatusBadRequest, "Password too weak"}
+	switch {
+	case errors.Is(err, ErrUserNotFound):
+		return HTTPError{
+			Status:  http.StatusNotFound,
+			Code:    CodeUserNotFound,
+			Message: "User not found",
+		}
+	case errors.Is(err, ErrUserAlreadyExists):
+		return HTTPError{
+			Status:  http.StatusConflict,
+			Code:    CodeUserExists,
+			Message: "Username already taken",
+		}
+	case errors.Is(err, ErrWeakPassword):
+		return HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    CodeWeakPassword,
+			Message: "Password must be at least 8 characters",
+		}
 	default:
-		return HTTPError{http.StatusInternalServerError, "Internal server error"}
+		return HTTPError{
+			Status:  http.StatusInternalServerError,
+			Code:    CodeInternal,
+			Message: "Internal server error",
+		}
 	}
+}
+
+// WithDetails adds additional error context
+func (e HTTPError) WithDetails(details interface{}) HTTPError {
+	e.Details = details
+	return e
 }

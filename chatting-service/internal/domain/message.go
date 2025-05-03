@@ -14,6 +14,7 @@ type Message struct {
 	Status      MessageStatus `gorm:"type:message_status;default:'sent'"`
 
 	// Relationships
+	//Using foreign keys and gorm models to allow eager/lazy loading
 	SenderID uint `gorm:"index"` // Foreign key to User
 	Sender   User `gorm:"foreignKey:SenderID"`
 

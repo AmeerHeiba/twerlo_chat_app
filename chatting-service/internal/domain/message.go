@@ -1,8 +1,11 @@
 package domain
 
 import (
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"gorm.io/gorm"
 )
 
@@ -39,4 +42,105 @@ type MessageRecipient struct {
 	UserID     uint      `gorm:"primaryKey"`
 	ReceivedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 	ReadAt     *time.Time
+}
+
+//Key Business Rules
+//1 - Content Validation
+//		-Either text or media must be present
+//		-Text length limits (1000 chars)
+//		-Media URL format validation
+//1 - Recipient Rules
+//		-Broadcasts can't have single RecipientID
+//		-Direct messages must have RecipientID
+//		-Broadcasts must have RecipientIDs
+
+func (m *Message) Validate() error {
+	// Content Validation
+	if strings.TrimSpace(m.Content) == "" && m.MediaURL == "" {
+		return shared.ErrEmptyMessage
+	}
+	if len(m.Content) > 1000 {
+		return shared.ErrMessageTooLong
+	}
+	if m.MediaURL != "" {
+		if _, err := url.ParseRequestURI(m.MediaURL); err != nil {
+			return shared.ErrInvalidMediaURL
+		}
+	}
+
+	// Recipient Rules
+	if m.RequiresRecipientsList() {
+		if m.RecipientID != nil {
+			return shared.ErrInvalidBroadcast
+		}
+		if len(m.Recipients) == 0 {
+			return shared.ErrNoRecipients
+		}
+	} else {
+		if m.RecipientID == nil {
+			return shared.ErrInvalidRecipient
+		}
+		if len(m.Recipients) > 0 {
+			return shared.ErrDirectMessageNoList
+		}
+	}
+
+	return nil
+}
+
+// Message Reciption val
+func (mr *MessageRecipient) Validate() error {
+	if mr.MessageID == 0 || mr.UserID == 0 {
+		return shared.ErrMissingRecOrSenderID
+	}
+	return nil
+}
+
+// GORM Hooks
+func (m *Message) BeforeCreate(tx *gorm.DB) error {
+	// Auto-set SentAt if not specified
+	if m.SentAt.IsZero() {
+		m.SentAt = time.Now().UTC()
+	}
+
+	// Enforce default status
+	if m.Status == "" {
+		m.Status = StatusSent
+	}
+
+	return m.Validate()
+}
+
+// Helper methods
+func (m *Message) IsDirect() bool {
+	return m.MessageType == MessageDirect
+}
+
+func (m *Message) IsBroadcast() bool {
+	return m.MessageType == MessageBroadcast
+}
+
+// State management
+func (m *Message) MarkDelivered() {
+	now := time.Now().UTC()
+	m.DeliveredAt = &now
+	m.Status = StatusDelivered
+}
+
+func (m *Message) MarkRead() {
+	if m.DeliveredAt == nil {
+		m.MarkDelivered()
+	}
+	now := time.Now().UTC()
+	m.ReadAt = &now
+	m.Status = StatusRead
+}
+
+func (m *Message) MarkFailed() {
+	m.Status = StatusFailed
+}
+
+func (m *Message) RequiresRecipientsList() bool {
+	return m.IsBroadcast()
+	// Later: return m.IsBroadcast() || m.IsGroup()
 }

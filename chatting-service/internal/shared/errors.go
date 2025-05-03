@@ -17,17 +17,25 @@ const (
 
 // Domain Errors (Business Rules)
 var (
-	ErrUsernameTooShort   = errors.New("user name should be longer than 3 letters")
-	ErrInvalidEmail       = errors.New("invalid email")
-	ErrWeakPassword       = errors.New("password must be at least 8 characters")
-	ErrUserNotFound       = errors.New("user not found")
-	ErrUserAlreadyExists  = errors.New("user already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrUsernameTooShort     = errors.New("user name should be longer than 3 letters")
+	ErrInvalidEmail         = errors.New("invalid email")
+	ErrWeakPassword         = errors.New("password must be at least 8 characters")
+	ErrUserNotFound         = errors.New("user not found")
+	ErrUserAlreadyExists    = errors.New("user already exists")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrEmptyMessage         = errors.New("message must contain text or media")
+	ErrMessageTooLong       = errors.New("message exceeds 1000 character limit")
+	ErrInvalidMediaURL      = errors.New("invalid media URL format")
+	ErrInvalidRecipient     = errors.New("direct messages require exactly one recipient")
+	ErrInvalidBroadcast     = errors.New("broadcasts cannot have direct recipient")
+	ErrMissingRecOrSenderID = errors.New("both message and user IDs are required")
+	ErrNoRecipients         = errors.New("message requires at least one recipient")
+	ErrDirectMessageNoList  = errors.New("direct messages should not specify recipients list")
 )
 
 // Application Errors (Use Cases)
 var (
-	ErrMessageTooLong = errors.New("message exceeds 1000 characters")
+	ErrTest = errors.New("place - holder for now ")
 )
 
 // Infrastructure Errors (DB, External Services)

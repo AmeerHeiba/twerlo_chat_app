@@ -6,6 +6,7 @@ const (
 	StatusSent      MessageStatus = "sent"
 	StatusDelivered MessageStatus = "delivered"
 	StatusRead      MessageStatus = "read"
+	StatusFailed    MessageStatus = "failed"
 )
 
 type UserStatus string

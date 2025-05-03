@@ -1,43 +1,27 @@
 # Chatting Service
 
-A real-time messaging service built with Go, Fiber, PostgreSQL, and WebSockets implementing Clean Architecture and CQRS pattern.
+A real-time messaging platform built with Go, Fiber, and PostgreSQL implementing Clean Architecture and CQRS patterns.
 
 ## Features
 
-- User authentication (JWT)
-- 1:1 messaging with CQRS separation
-- Broadcast messaging via RabbitMQ
-- Media attachments with local storage
-- Real-time updates via WebSockets
+- **User Authentication**: JWT-based auth with refresh tokens
+- **Messaging**: 1:1 and group conversations
+- **Real-Time Updates**: WebSocket notifications
+- **Media Support**: File uploads with storage abstraction
+- **Transactional Safety**: Atomic operation guarantees
 
-## Tech Stack
-
-- **Backend**: Go 1.21, Fiber
-- **Database**: PostgreSQL 14
-- **Real-time**: WebSockets (Gorilla)
-- **Broker**: RabbitMQ (for message fan-out)
-- **Storage**: Local filesystem (extensible to S3)
-- **Architecture**: Clean Architecture + CQRS
-
-## Architecture Overview
+## Architecture
 Presentation → Application → Domain ← Infrastructure
 
-### Key Patterns:
-1. **Clean Architecture**:
-   - Domain-centric design
-   - Framework-independent core
-   - Testable components
+### Core Patterns
+- **Clean Architecture**: Domain-centric design
+- **CQRS**: Separate command and query paths
+- **Repository Pattern**: Persistence abstraction
+- **Transaction Management**: Cross-operation atomicity
 
-2. **CQRS**:
-   - Separate command (write) and query (read) paths
-   - Optimized read models for message history
-   - Transactional write models for message sending
-
-3. **Domain-Driven Design**:
-   - Explicit bounded contexts (Auth, Messaging, Media)
-   - Repository pattern for persistence
 
 ## Folder Structure
+```
 /chatting-service
 ├── /cmd
 │ └── /api
@@ -61,7 +45,43 @@ Presentation → Application → Domain ← Infrastructure
 ├── go.mod # Go dependencies
 ├── go.sum
 └── Dockerfile # Multi-stage build
+```
 
+## Tech Stack
+
+| Component       | Technology          |
+|-----------------|---------------------|
+| Language        | Go 1.21+            |
+| Web Framework   | Fiber v2            |
+| Database        | PostgreSQL 14       |
+| ORM             | GORM                |
+| Real-Time       | Gorilla WebSocket   |
+| Error Handling  | Custom middleware   |
+
+## Key Components
+
+### Domain Layer
+```go
+// Example repository interface
+type UserRepository interface {
+    Create(ctx context.Context, user *User) error
+    FindByID(ctx context.Context, id uint) (*User, error)
+}
+```
+
+### Transaction Management
+```go
+// Atomic operation example
+err := txManager.WithTransaction(ctx, func(ctx context.Context, repos *Repositories) error {
+    // Transactional operations
+})
+```
+### Error Handling
+
+Structured error responses with:
+HTTP status codes
+Machine-readable error codes
+Contextual message
 
 ## Getting Started
 

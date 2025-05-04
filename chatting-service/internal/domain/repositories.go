@@ -14,10 +14,12 @@ type MessageQuery struct {
 	After       time.Time // Return messages after this time
 	SortBy      string    // "asc" or "desc"
 	MessageType string    // Filter by message type
+	HasMedia    *bool     // Filter by media presence
+	Status      string    // Filter by status
 }
 
 type UserRepository interface {
-	Create(ctx context.Context, userName string, email string, passwordHash string) (*User, error)
+	Create(ctx context.Context, userName, email, passwordHash string) (*User, error)
 	FindByID(ctx context.Context, userID uint) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	Update(ctx context.Context, user *User) error
@@ -26,13 +28,14 @@ type UserRepository interface {
 }
 
 type MessageRepository interface {
-	Create(ctx context.Context, senderID uint, content string, mediaURL string, messageType MessageType) (*Message, error)
+	Create(ctx context.Context, senderID uint, content, mediaURL string, messageType MessageType) (*Message, error)
 	FindByID(ctx context.Context, messageID uint) (*Message, error)
 	FindConversation(ctx context.Context, user1ID, user2ID uint, query MessageQuery) ([]Message, error)
 	FindUserMessages(ctx context.Context, userID uint, query MessageQuery) ([]Message, error)
 	FindBroadcasts(ctx context.Context, broadcasterID uint, query MessageQuery) ([]Message, error)
 	MarkAsDelivered(ctx context.Context, messageID uint) error
 	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
+	Delete(ctx context.Context, messageID uint) error
 }
 
 type MessageRecipientRepository interface {
@@ -52,12 +55,16 @@ type MessageService interface {
 
 type TokenProvider interface {
 	GenerateToken(ctx context.Context, user *User) (string, error)
+	GenerateRefreshToken(ctx context.Context, user *User) (string, error)
 	ValidateToken(ctx context.Context, tokenString string) (*TokenClaims, error)
+	ValidateRefreshToken(ctx context.Context, tokenString string) (*TokenClaims, error)
+	GetAccessExpiry() time.Duration
+	GetRefreshExpiry() time.Duration
 }
 
 type AuthService interface {
-	Login(ctx context.Context, username, password string) (*AuthResponse, error)
-	Refresh(ctx context.Context, refreshToken string) (*AuthResponse, error)
+	Login(ctx context.Context, username, password string) (interface{}, error)
+	Refresh(ctx context.Context, refreshToken string) (interface{}, error)
 	Logout(ctx context.Context, token string) error
 }
 
@@ -71,6 +78,7 @@ type MediaStorage interface {
 
 type MediaService interface {
 	Upload(ctx context.Context, userID uint, file io.Reader, filename string, size int64) (*MediaResponse, error)
+	GetByUser(ctx context.Context, userID uint) ([]MediaResponse, error)
 	Delete(ctx context.Context, userID uint, mediaID uint) error
 }
 

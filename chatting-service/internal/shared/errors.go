@@ -7,12 +7,13 @@ import (
 
 // Error Codes (Machine-readable)
 const (
-	CodeUserNotFound = "USER_NOT_FOUND"
-	CodeUserExists   = "USER_EXISTS"
-	CodeInvalidCreds = "INVALID_CREDENTIALS"
-	CodeWeakPassword = "WEAK_PASSWORD"
-	CodeDBConnection = "DB_CONNECTION_FAILED"
-	CodeInternal     = "INTERNAL_ERROR"
+	CodeUserNotFound    = "USER_NOT_FOUND"
+	CodeUserExists      = "USER_EXISTS"
+	CodeInvalidCreds    = "INVALID_CREDENTIALS"
+	CodeWeakPassword    = "WEAK_PASSWORD"
+	CodeDBConnection    = "DB_CONNECTION_FAILED"
+	CodeInternal        = "INTERNAL_ERROR"
+	CodeInvalidUsername = "INVALID_USERNAME"
 )
 
 // Domain Errors (Business Rules)
@@ -31,17 +32,10 @@ var (
 	ErrMissingRecOrSenderID = errors.New("both message and user IDs are required")
 	ErrNoRecipients         = errors.New("message requires at least one recipient")
 	ErrDirectMessageNoList  = errors.New("direct messages should not specify recipients list")
-)
-
-// Application Errors (Use Cases)
-var (
-	ErrTest = errors.New("place - holder for now ")
-)
-
-// Infrastructure Errors (DB, External Services)
-var (
-	ErrDatabaseConnection = errors.New("database connection failed")
-	ErrFileUploadFailed   = errors.New("file upload failed")
+	ErrTest                 = errors.New("place - holder for now ")
+	ErrUserExists           = errors.New("User already exists")
+	ErrDatabaseConnection   = errors.New("database connection failed")
+	ErrFileUploadFailed     = errors.New("file upload failed")
 )
 
 // HTTP Error Responses
@@ -71,6 +65,19 @@ func ToHTTPError(err error) HTTPError {
 			Status:  http.StatusBadRequest,
 			Code:    CodeWeakPassword,
 			Message: "Password must be at least 8 characters",
+		}
+	case errors.Is(err, ErrUserExists):
+		return HTTPError{
+			Status:  http.StatusConflict,
+			Code:    CodeUserExists,
+			Message: "User already exists",
+		}
+
+	case errors.Is(err, ErrUsernameTooShort):
+		return HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    CodeInvalidUsername,
+			Message: "Username must be at least 3 characters",
 		}
 	default:
 		return HTTPError{

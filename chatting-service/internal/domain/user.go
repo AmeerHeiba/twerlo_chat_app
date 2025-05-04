@@ -29,13 +29,15 @@ type User struct {
 // BeforeCreate sets the LastActiveAt field to the current time
 // before a new User record is created in the database.
 func (u *User) BeforeCreate(tx *gorm.DB) error {
-	u.UpdateLastActive()
-	return u.Validate()
+	// Only validate new users
+	if u.ID == 0 { // New user
+		return u.Validate()
+	}
+	return nil
 }
 
-// BeforeUpdate GORM hook for pre-update validation
-func (u *User) BeforeUpdate(tx *gorm.DB) error {
-	return u.Validate()
+func (u *User) AfterFind(tx *gorm.DB) error {
+	return nil // Skip all validation on find
 }
 
 // check user rules for user critical fields validty

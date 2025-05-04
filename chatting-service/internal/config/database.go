@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -21,14 +22,35 @@ type DBConfig struct {
 }
 
 func LoadDBConfig() DBConfig {
-	return DBConfig{
-		Host:     os.Getenv("DB_HOST"),
-		Port:     os.Getenv("DB_PORT"),
-		User:     os.Getenv("DB_USER"),
-		Password: os.Getenv("DB_PASSWORD"),
-		DBName:   os.Getenv("DB_NAME"),
-		SSLMode:  "disable", // For development
+	// Try to load .env file (won't error if not found)
+	godotenv.Load()
+
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = "localhost" // Default for local dev
 	}
+
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5433" // Default local port
+	}
+
+	return DBConfig{
+		Host:     host,
+		Port:     port,
+		User:     getEnvWithDefault("DB_USER", "postgres"),
+		Password: getEnvWithDefault("DB_PASSWORD", "postgres"),
+		DBName:   getEnvWithDefault("DB_NAME", "chatting_service"),
+		SSLMode:  "disable",
+	}
+}
+
+func getEnvWithDefault(key, defaultValue string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	return val
 }
 
 func NewDBConnection(config DBConfig) (*gorm.DB, error) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -28,7 +29,7 @@ type Message struct {
 	Broadcaster   *User `gorm:"foreignKey:BroadcasterID"`
 
 	// For broadcast recipients (many-to-many)
-	Recipients []User `gorm:"many2many:message_recipients;"`
+	Recipients []User `gorm:"many2many:message_recipients;joinForeignKey:MessageID;joinReferences:UserID"`
 
 	// Metadata
 	SentAt      time.Time `gorm:"index;default:CURRENT_TIMESTAMP"`
@@ -55,6 +56,18 @@ type MessageRecipient struct {
 //		-Broadcasts must have RecipientIDs
 
 func (m *Message) Validate() error {
+	shared.Log.Debug("Validating message",
+		zap.Any("message", m),
+		zap.Bool("isBroadcast", m.IsBroadcast()),
+		zap.Int("numRecipients", len(m.Recipients)),
+		zap.Any("recipients", m.Recipients))
+
+	if m.RequiresRecipientsList() {
+		if len(m.Recipients) == 0 {
+			shared.Log.Error("Validation failed - no recipients for broadcast")
+			return shared.ErrNoRecipients
+		}
+	}
 	// Content Validation
 	if strings.TrimSpace(m.Content) == "" && m.MediaURL == "" {
 		return shared.ErrEmptyMessage
@@ -108,7 +121,7 @@ func (m *Message) BeforeCreate(tx *gorm.DB) error {
 		m.Status = StatusSent
 	}
 
-	return m.Validate()
+	return nil // REMOVED THE VALIDATION CALL HERE
 }
 
 // Helper methods

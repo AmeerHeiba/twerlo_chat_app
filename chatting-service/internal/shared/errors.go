@@ -7,13 +7,16 @@ import (
 
 // Error Codes (Machine-readable)
 const (
-	CodeUserNotFound    = "USER_NOT_FOUND"
-	CodeUserExists      = "USER_EXISTS"
-	CodeInvalidCreds    = "INVALID_CREDENTIALS"
-	CodeWeakPassword    = "WEAK_PASSWORD"
-	CodeDBConnection    = "DB_CONNECTION_FAILED"
-	CodeInternal        = "INTERNAL_ERROR"
-	CodeInvalidUsername = "INVALID_USERNAME"
+	CodeUserNotFound         = "USER_NOT_FOUND"
+	CodeUserExists           = "USER_EXISTS"
+	CodeInvalidCreds         = "INVALID_CREDENTIALS"
+	CodeWeakPassword         = "WEAK_PASSWORD"
+	CodeDBConnection         = "DB_CONNECTION_FAILED"
+	CodeInternal             = "INTERNAL_ERROR"
+	CodeInvalidUsername      = "INVALID_USERNAME"
+	CodeMessageNotFound      = "MESSAGE_NOT_FOUND"
+	CodeInvalidMessageType   = "INVALID_MESSAGE_TYPE"
+	CodeInvalidMessageStatus = "INVALID_MESSAGE_STATUS"
 )
 
 // Domain Errors (Business Rules)
@@ -37,6 +40,9 @@ var (
 	ErrDatabaseConnection   = errors.New("database connection failed")
 	ErrFileUploadFailed     = errors.New("file upload failed")
 	ErrEmailExists          = errors.New("email already exists")
+	ErrMessageNotFound      = errors.New("message not found")
+	ErrInvalidMessageType   = errors.New("invalid message type")
+	ErrInvalidMessageStatus = errors.New("invalid message status")
 )
 
 // HTTP Error Responses
@@ -79,6 +85,30 @@ func ToHTTPError(err error) HTTPError {
 			Status:  http.StatusBadRequest,
 			Code:    CodeInvalidUsername,
 			Message: "Username must be at least 3 characters",
+		}
+	case errors.Is(err, ErrMessageNotFound):
+		return HTTPError{
+			Status:  http.StatusNotFound,
+			Code:    CodeMessageNotFound,
+			Message: "Message not found",
+		}
+	case errors.Is(err, ErrInvalidMessageType):
+		return HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    CodeInvalidMessageType,
+			Message: "Invalid message type",
+		}
+	case errors.Is(err, ErrInvalidMessageStatus):
+		return HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    CodeInvalidMessageStatus,
+			Message: "Invalid message status",
+		}
+	case errors.Is(err, ErrInvalidRecipient):
+		return HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    "INVALID_RECIPIENT",
+			Message: "Direct messages require exactly one recipient",
 		}
 	default:
 		return HTTPError{

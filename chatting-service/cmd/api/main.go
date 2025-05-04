@@ -35,6 +35,14 @@ func main() {
 	// Setup all routes
 	routes.SetupRoutes(app, deps)
 
+	//Not found route
+	app.Use(func(c *fiber.Ctx) error {
+		return c.Status(404).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Endpoint not found",
+			"path":    c.Path(),
+		})
+	})
 	// Start server
 	startServer(app)
 }
@@ -50,19 +58,23 @@ func initDB() *gorm.DB {
 func initDependencies(db *gorm.DB) routes.Dependencies {
 	// Repositories
 	userRepo := database.NewUserRepository(db)
+	messageRepo := database.NewMessageRepository(db)
+	messageRecipientRepo := database.NewMessageRecipientRepository(db)
 
 	// Services
 	userService := application.NewUserService(userRepo)
 	authCfg := config.LoadAuthConfig()
 	jwtProvider := auth.NewJWTProvider(authCfg)
 	authService := application.NewAuthService(userRepo, userService, jwtProvider)
+	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil)
 
 	// Handlers
 	return routes.Dependencies{
-		DB:          db,
-		UserHandler: handlers.NewUserHandler(userService),
-		AuthHandler: handlers.NewAuthHandler(authService),
-		JWTProvider: jwtProvider,
+		DB:             db,
+		UserHandler:    handlers.NewUserHandler(userService),
+		AuthHandler:    handlers.NewAuthHandler(authService),
+		MessageHandler: handlers.NewMessageHandler(messageService),
+		JWTProvider:    jwtProvider,
 	}
 }
 

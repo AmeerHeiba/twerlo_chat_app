@@ -31,12 +31,14 @@ type UserRepository interface {
 
 type MessageRepository interface {
 	Create(ctx context.Context, senderID uint, content, mediaURL string, messageType MessageType) (*Message, error)
+	CreateWithRecipients(ctx context.Context, msg *Message, recipientIDs []uint) (*Message, error)
 	FindByID(ctx context.Context, messageID uint) (*Message, error)
 	FindConversation(ctx context.Context, user1ID, user2ID uint, query MessageQuery) ([]Message, error)
 	FindUserMessages(ctx context.Context, userID uint, query MessageQuery) ([]Message, error)
 	FindBroadcasts(ctx context.Context, broadcasterID uint, query MessageQuery) ([]Message, error)
 	MarkAsDelivered(ctx context.Context, messageID uint) error
 	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
+	Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error
 	Delete(ctx context.Context, messageID uint) error
 }
 

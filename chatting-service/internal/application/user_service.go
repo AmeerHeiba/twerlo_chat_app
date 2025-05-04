@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"strings"
 
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
@@ -51,6 +52,10 @@ func (s *UserService) GetUserByID(ctx context.Context, id uint) (*domain.User, e
 	return s.userRepo.FindByID(ctx, id)
 }
 
+func (s *UserService) GetUserProfile(ctx context.Context, id uint) (*domain.User, error) {
+	return s.userRepo.FindProfileByID(ctx, id)
+}
+
 func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return s.userRepo.FindByUsername(ctx, username)
 }
@@ -82,4 +87,27 @@ func (s *UserService) VerifyCredentials(ctx context.Context, username, password 
 	}
 
 	return user, nil
+}
+
+func (s *UserService) UpdateProfile(ctx context.Context, userID uint, username, email string) (*domain.User, error) {
+	// Input validation (e.g., email format, username length)
+	if username != "" && len(username) < 3 {
+		return nil, shared.ErrUsernameTooShort
+	}
+	if email != "" && !strings.Contains(email, "@") {
+		return nil, shared.ErrInvalidEmail
+	}
+
+	// Delegate to repository
+	if err := s.userRepo.Update(ctx, userID, username, email); err != nil {
+		return nil, err
+	}
+
+	return s.userRepo.FindByID(ctx, userID)
+}
+
+func (s *UserService) GetMessageHistory(ctx context.Context, userID uint, limit, offset int) ([]domain.Message, int64, error) {
+	// I'll implement this fully after I create the message logic
+	// For now just the signature
+	return nil, 0, nil
 }

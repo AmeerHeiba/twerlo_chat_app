@@ -22,7 +22,9 @@ type UserRepository interface {
 	Create(ctx context.Context, userName, email, passwordHash string) (*User, error)
 	FindByID(ctx context.Context, userID uint) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
-	Update(ctx context.Context, user *User) error
+	FindProfileByID(ctx context.Context, userID uint) (*User, error)
+	Update(ctx context.Context, userID uint, username, email string) error
+	UpdatePassword(ctx context.Context, userID uint, passwordHash string) error
 	UpdateLastActiveAt(ctx context.Context, userID uint) error
 	Exists(ctx context.Context, username string) (bool, error)
 }

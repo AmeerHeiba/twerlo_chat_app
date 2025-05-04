@@ -149,3 +149,20 @@ func (s *AuthService) Logout(ctx context.Context, token string) error {
 func (s *AuthService) ValidateToken(ctx context.Context, token string) (*domain.TokenClaims, error) {
 	return s.tokenProvider.ValidateToken(ctx, token)
 }
+
+func (s *AuthService) ChangePassword(ctx context.Context, userID uint, currentPassword, newPassword string) error {
+	user, err := s.userService.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !user.CheckPassword(currentPassword) {
+		return domain.ErrInvalidCredentials
+	}
+
+	// Set new password
+	if err := user.SetPassword(newPassword); err != nil {
+		return err
+	}
+
+	return s.userRepo.UpdatePassword(ctx, userID, user.PasswordHash)
+}

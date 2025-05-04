@@ -47,7 +47,15 @@ func (u *User) Validate() error {
 		return shared.ErrUsernameTooShort
 	case !strings.Contains(u.Email, "@") || !strings.Contains(u.Email, "."):
 		return shared.ErrInvalidEmail
-	case u.PasswordHash == "" || len(u.PasswordHash) < 8:
+	}
+	return nil
+}
+
+func (u *User) ValidateRegistration() error {
+	if err := u.Validate(); err != nil {
+		return err
+	}
+	if u.PasswordHash == "" || len(u.PasswordHash) < 8 {
 		return shared.ErrWeakPassword
 	}
 	return nil

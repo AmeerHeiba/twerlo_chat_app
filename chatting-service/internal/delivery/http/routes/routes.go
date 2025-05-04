@@ -20,7 +20,7 @@ func SetupRoutes(app *fiber.App, deps Dependencies) {
 	SetupHealthRoutes(app, deps.DB)
 
 	// Auth routes (no auth)
-	SetupAuthRoutes(app, deps.AuthHandler)
+	SetupAuthRoutes(app, deps.AuthHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
 	// Profile routes (protected)
 	SetupUserRoutes(app, deps.UserHandler, middleware.NewAuthMiddleware(deps.JWTProvider))

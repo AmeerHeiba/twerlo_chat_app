@@ -36,6 +36,7 @@ var (
 	ErrUserExists           = errors.New("User already exists")
 	ErrDatabaseConnection   = errors.New("database connection failed")
 	ErrFileUploadFailed     = errors.New("file upload failed")
+	ErrEmailExists          = errors.New("email already exists")
 )
 
 // HTTP Error Responses

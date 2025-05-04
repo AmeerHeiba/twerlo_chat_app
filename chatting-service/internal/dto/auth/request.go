@@ -14,3 +14,8 @@ type RegisterRequest struct {
 type RefreshRequest struct {
 	Token string `json:"refresh_token" validate:"required"`
 }
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required,min=8"`
+	NewPassword     string `json:"new_password" validate:"required,min=8"`
+}

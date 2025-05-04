@@ -7,7 +7,8 @@ import (
 
 func SetupUserRoutes(app *fiber.App, handler *handlers.UserHandler, authMiddleware fiber.Handler) {
 	user := app.Group("/api/users", authMiddleware)
-	user.Get("/", handler.GetUserProfile)
-	// user.Get("/", handler.ListUsers)
-	// user.Get("/:id", handler.GetUser)
+	user.Get("/profile", handler.GetUserProfile)
+	user.Put("/profile", handler.UpdateProfile)
+	user.Get("/messages", handler.GetMessageHistory)
+
 }

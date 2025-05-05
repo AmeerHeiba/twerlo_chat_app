@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/AmeerHeiba/chatting-service/internal/application"
 	"github.com/AmeerHeiba/chatting-service/internal/config"
@@ -13,9 +14,19 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+func stackTraceHandler(c *fiber.Ctx, e interface{}) {
+	shared.Log.Error("Recovered from panic",
+		zap.Any("error", e),
+		zap.String("path", c.Path()),
+		zap.ByteString("stack", debug.Stack()),
+	)
+}
 
 func main() {
 	// Load environment
@@ -27,6 +38,10 @@ func main() {
 	db := initDB()
 	app := fiber.New()
 	shared.InitLogger(os.Getenv("APP_ENV"))
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace:  true,              // Include stack trace in logs
+		StackTraceHandler: stackTraceHandler, // Custom stack trace handler
+	}))
 	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
 
@@ -44,8 +59,10 @@ func main() {
 			"path":    c.Path(),
 		})
 	})
+
 	// Start server
 	startServer(app)
+
 }
 
 func initDB() *gorm.DB {

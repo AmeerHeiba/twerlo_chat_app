@@ -61,7 +61,6 @@ func (s *MessageService) SendDirectMessage(ctx context.Context, senderID, recipi
 		shared.Log.Error("create message failed",
 			zap.String("operation", "SendDirectMessage"),
 			zap.Uint("recipientID", recipientID),
-			zap.Uint("senderID", senderID),
 			zap.Error(err))
 		return nil, err
 	}

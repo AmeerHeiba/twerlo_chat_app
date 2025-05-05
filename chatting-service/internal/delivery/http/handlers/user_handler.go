@@ -4,6 +4,8 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/application"
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
 	"github.com/AmeerHeiba/chatting-service/internal/dto/user"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -22,6 +24,7 @@ func (h *UserHandler) GetUserProfile(c *fiber.Ctx) error {
 
 	profile, err := h.userService.GetUserProfile(c.Context(), claims.UserID)
 	if err != nil {
+		shared.Log.Error("Failed to get user profile", zap.Error(err))
 		return err
 	}
 
@@ -39,13 +42,15 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 
 	var body user.UpdateProfileRequest
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
+		shared.Log.Error("Invalid update profile request body",
+			zap.Error(err),
+			zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
 	}
 
 	updatedUser, err := h.userService.UpdateProfile(c.Context(), claims.UserID, body.Username, body.Email)
 	if err != nil {
+		shared.Log.Error("Failed to update user profile", zap.Error(err))
 		return err
 	}
 
@@ -63,18 +68,19 @@ func (h *UserHandler) GetMessageHistory(c *fiber.Ctx) error {
 
 	var query user.MessageHistoryRequest
 	if err := c.QueryParser(&query); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid query parameters",
-		})
+		shared.Log.Error("Invalid message history request query", zap.Error(err), zap.Any("query", query))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing query params").WithDetails(err.Error())
 	}
 
 	// Default values
 	if query.Limit == 0 {
 		query.Limit = 20
+		shared.Log.Debug("Using default limit", zap.Int("limit", query.Limit))
 	}
 
 	messages, total, err := h.userService.GetMessageHistory(c.Context(), claims.UserID, query.Limit, query.Offset)
 	if err != nil {
+		shared.Log.Error("Failed to get message history", zap.Error(err))
 		return err
 	}
 

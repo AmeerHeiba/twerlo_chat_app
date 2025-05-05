@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"golang.org/x/crypto/bcrypt"
 
 	"gorm.io/gorm"
@@ -44,9 +43,9 @@ func (u *User) AfterFind(tx *gorm.DB) error {
 func (u *User) Validate() error {
 	switch {
 	case len(u.Username) < 3:
-		return shared.ErrUsernameTooShort
+		return ErrUsernameTooShort
 	case !strings.Contains(u.Email, "@") || !strings.Contains(u.Email, "."):
-		return shared.ErrInvalidEmail
+		return ErrInvalidEmail
 	}
 	return nil
 }
@@ -56,7 +55,7 @@ func (u *User) ValidateRegistration() error {
 		return err
 	}
 	if u.PasswordHash == "" || len(u.PasswordHash) < 8 {
-		return shared.ErrWeakPassword
+		return ErrWeakPassword
 	}
 	return nil
 }
@@ -64,7 +63,7 @@ func (u *User) ValidateRegistration() error {
 // SetPassword securely hashes and stores password
 func (u *User) SetPassword(plainText string) error {
 	if len(plainText) < 8 {
-		return shared.ErrWeakPassword
+		return ErrWeakPassword
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(plainText), bcrypt.DefaultCost)
 	if err != nil {

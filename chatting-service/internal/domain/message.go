@@ -65,36 +65,36 @@ func (m *Message) Validate() error {
 	if m.RequiresRecipientsList() {
 		if len(m.Recipients) == 0 {
 			shared.Log.Error("Validation failed - no recipients for broadcast")
-			return shared.ErrNoRecipients
+			return ErrNoRecipients
 		}
 	}
 	// Content Validation
 	if strings.TrimSpace(m.Content) == "" && m.MediaURL == "" {
-		return shared.ErrEmptyMessage
+		return ErrEmptyMessage
 	}
 	if len(m.Content) > 1000 {
-		return shared.ErrMessageTooLong
+		return ErrMessageTooLong
 	}
 	if m.MediaURL != "" {
 		if _, err := url.ParseRequestURI(m.MediaURL); err != nil {
-			return shared.ErrInvalidMediaURL
+			return ErrInvalidMediaURL
 		}
 	}
 
 	// Recipient Rules
 	if m.RequiresRecipientsList() {
 		if m.RecipientID != nil {
-			return shared.ErrInvalidBroadcast
+			return ErrInvalidBroadcast
 		}
 		if len(m.Recipients) == 0 {
-			return shared.ErrNoRecipients
+			return ErrNoRecipients
 		}
 	} else {
 		if m.RecipientID == nil {
-			return shared.ErrInvalidRecipient
+			return ErrInvalidRecipient
 		}
 		if len(m.Recipients) > 0 {
-			return shared.ErrDirectMessageNoList
+			return ErrDirectMessageNoList
 		}
 	}
 
@@ -104,7 +104,7 @@ func (m *Message) Validate() error {
 // Message Reciption val
 func (mr *MessageRecipient) Validate() error {
 	if mr.MessageID == 0 || mr.UserID == 0 {
-		return shared.ErrMissingRecOrSenderID
+		return ErrMissingRecOrSenderID
 	}
 	return nil
 }

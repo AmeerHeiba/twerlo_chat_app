@@ -27,6 +27,7 @@ func main() {
 	db := initDB()
 	app := fiber.New()
 	shared.InitLogger(os.Getenv("APP_ENV"))
+	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
 
 	// Initialize services and handlers

@@ -4,7 +4,9 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/application"
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
 	"github.com/AmeerHeiba/chatting-service/internal/dto/message"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
 )
 
 type MessageHandler struct {
@@ -20,16 +22,15 @@ func (h *MessageHandler) SendMessage(c *fiber.Ctx) error {
 
 	var body message.SendRequest
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
 	}
 
 	// Additional validation
 	if body.Type == "direct" && body.RecipientID == 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Recipient ID is required for direct messages",
-		})
+		shared.Log.Debug("Missing recipient ID ",
+			zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check recipient ID")
 	}
 
 	var msg *domain.Message
@@ -45,16 +46,15 @@ func (h *MessageHandler) SendMessage(c *fiber.Ctx) error {
 			body.MediaURL,
 		)
 	case "broadcast":
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Use /broadcast endpoint for broadcasts",
-		})
+		shared.Log.Warn("Wrong broadcast endpoint", zap.String("url", c.OriginalURL()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body use broadcast endpoint for sending broadcast messages")
 	default:
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid message type",
-		})
+		shared.Log.Warn("Invalid message type", zap.String("type", body.Type))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check message type")
 	}
 
 	if err != nil {
+		shared.Log.Warn("Failed to send message", zap.Error(err), zap.ByteString("body", c.Body()))
 		return err
 	}
 
@@ -66,16 +66,14 @@ func (h *MessageHandler) SendBroadcast(c *fiber.Ctx) error {
 
 	var body message.BroadcastRequest
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
 	}
 
 	// validation for recipient IDs
 	if len(body.RecipientIDs) == 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "At least one recipient is required for broadcast",
-		})
+		shared.Log.Debug("No recipients", zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check recipient IDs")
 	}
 
 	msg, err := h.messageService.SendBroadcast(
@@ -86,6 +84,7 @@ func (h *MessageHandler) SendBroadcast(c *fiber.Ctx) error {
 		body.RecipientIDs,
 	)
 	if err != nil {
+		shared.Log.Error("Failed to send broadcast message", zap.Error(err), zap.ByteString("body", c.Body()))
 		return err
 	}
 
@@ -96,16 +95,19 @@ func (h *MessageHandler) GetConversation(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	otherUserID, err := c.ParamsInt("userID")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid user ID",
-		})
+		shared.Log.Error("Invalid user ID", zap.Error(err), zap.String("userID", c.Params("userID")))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing user ID").WithDetails(err.Error())
 	}
 
 	var query message.QueryRequest
 	if err := c.QueryParser(&query); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid query parameters",
-		})
+		shared.Log.Error("Invalid conversation request query", zap.Error(err), zap.String("path", c.Path()),
+			zap.Any("query", map[string]interface{}{
+				"limit":  c.Query("limit"),
+				"offset": c.Query("offset"),
+				"before": c.Query("before"),
+			}))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing query params").WithDetails(err.Error())
 	}
 
 	messages, err := h.messageService.GetConversation(
@@ -115,6 +117,7 @@ func (h *MessageHandler) GetConversation(c *fiber.Ctx) error {
 		toDomainQuery(query),
 	)
 	if err != nil {
+		shared.Log.Error("Failed to get conversation", zap.Error(err))
 		return err
 	}
 
@@ -132,9 +135,8 @@ func (h *MessageHandler) MarkAsRead(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	messageID, err := c.ParamsInt("id")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid message ID",
-		})
+		shared.Log.Error("Invalid message ID", zap.Error(err))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing message ID").WithDetails(err.Error())
 	}
 
 	if err := h.messageService.MarkAsRead(
@@ -142,6 +144,7 @@ func (h *MessageHandler) MarkAsRead(c *fiber.Ctx) error {
 		uint(messageID),
 		claims.UserID,
 	); err != nil {
+		shared.Log.Error("Failed to mark message as read", zap.Error(err))
 		return err
 	}
 
@@ -154,9 +157,8 @@ func (h *MessageHandler) DeleteMessage(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	messageID, err := c.ParamsInt("id")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid message ID",
-		})
+		shared.Log.Error("Invalid message ID", zap.Error(err), zap.String("id", c.Params("id")))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing message ID").WithDetails(err.Error())
 	}
 
 	if err := h.messageService.DeleteMessage(
@@ -164,6 +166,7 @@ func (h *MessageHandler) DeleteMessage(c *fiber.Ctx) error {
 		uint(messageID),
 		claims.UserID,
 	); err != nil {
+		shared.Log.Error("Failed to delete message", zap.Error(err), zap.String("id", c.Params("id")))
 		return err
 	}
 

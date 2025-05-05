@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
@@ -21,7 +20,7 @@ func TestMessage_Validate(t *testing.T) {
 		{
 			name:    "EmptyMessage",
 			message: Message{Content: "", MediaURL: ""},
-			wantErr: shared.ErrEmptyMessage,
+			wantErr: ErrEmptyMessage,
 		},
 		{
 			name: "ValidTextOnly",
@@ -46,12 +45,12 @@ func TestMessage_Validate(t *testing.T) {
 		{
 			name:    "TextTooLong",
 			message: Message{Content: strings.Repeat("a", 1001), MediaURL: ""},
-			wantErr: shared.ErrMessageTooLong,
+			wantErr: ErrMessageTooLong,
 		},
 		{
 			name:    "InvalidMediaURL",
 			message: Message{Content: "", MediaURL: "invalid-url"},
-			wantErr: shared.ErrInvalidMediaURL,
+			wantErr: ErrInvalidMediaURL,
 		},
 
 		// Direct Message Recipient Tests
@@ -72,7 +71,7 @@ func TestMessage_Validate(t *testing.T) {
 				MessageType: MessageDirect,
 				SenderID:    1,
 			},
-			wantErr: shared.ErrInvalidRecipient,
+			wantErr: ErrInvalidRecipient,
 		},
 		{
 			name: "DirectMessageWithRecipientsList",
@@ -83,7 +82,7 @@ func TestMessage_Validate(t *testing.T) {
 				Recipients:  []User{{Model: gorm.Model{ID: 3}}},
 				SenderID:    1,
 			},
-			wantErr: shared.ErrDirectMessageNoList,
+			wantErr: ErrDirectMessageNoList,
 		},
 
 		// Broadcast Message Tests
@@ -105,7 +104,7 @@ func TestMessage_Validate(t *testing.T) {
 				RecipientID: uintPtr(2),
 				SenderID:    1,
 			},
-			wantErr: shared.ErrInvalidBroadcast,
+			wantErr: ErrInvalidBroadcast,
 		},
 		{
 			name: "BroadcastNoRecipients",
@@ -114,7 +113,7 @@ func TestMessage_Validate(t *testing.T) {
 				MessageType: MessageBroadcast,
 				SenderID:    1,
 			},
-			wantErr: shared.ErrNoRecipients,
+			wantErr: ErrNoRecipients,
 		},
 	}
 
@@ -144,12 +143,12 @@ func TestMessageRecipient_Validate(t *testing.T) {
 		{
 			name: "MissingMessageID",
 			mr:   MessageRecipient{UserID: 1},
-			want: shared.ErrMissingRecOrSenderID,
+			want: ErrMissingRecOrSenderID,
 		},
 		{
 			name: "MissingUserID",
 			mr:   MessageRecipient{MessageID: 1},
-			want: shared.ErrMissingRecOrSenderID,
+			want: ErrMissingRecOrSenderID,
 		},
 	}
 

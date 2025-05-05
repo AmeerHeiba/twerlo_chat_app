@@ -7,6 +7,7 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
 	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
 )
 
 type AuthService struct {
@@ -31,18 +32,25 @@ func (s *AuthService) Register(ctx context.Context, username, email, password st
 	// Create user through service (includes validation)
 	user, err := s.userService.CreateUser(ctx, username, email, password)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("create user failed",
+			zap.String("operation", "Create"),
+			zap.Error(err),
+			zap.String("username", username),
+			zap.String("email", email))
+		return nil, shared.ErrDatabaseOperation.WithDetails("create user failed").WithDetails(err.Error())
 	}
 
 	// Generate tokens
 	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
 	}
 
 	refreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
 	}
 
 	return &auth.AuthResponse{
@@ -62,28 +70,33 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*au
 	username = strings.TrimSpace(username)
 
 	if len(username) < 3 {
-		return nil, shared.ErrUsernameTooShort
+		shared.Log.Debug("username must be at least 3 characters long", zap.String("username", username))
+		return nil, shared.ErrBadRequest.WithDetails("Invalid username")
 	}
 
 	user, err := s.userService.VerifyCredentials(ctx, username, password)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("verify credentials failed", zap.Error(err), zap.String("username", username))
+		return nil, shared.ErrValidation.WithDetails("invalid credentials").WithDetails(err.Error())
 	}
 
 	// Update last active
 	if err := s.userService.UpdateUserLastActive(ctx, user.ID); err != nil {
-		return nil, err
+		shared.Log.Error("update user last active failed", zap.Error(err), zap.Uint("userID", user.ID))
+		return nil, shared.ErrDatabaseOperation.WithDetails("update user last active failed").WithDetails(err.Error())
 	}
 
 	// Generate tokens
 	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
 	}
 
 	refreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
 	}
 
 	return &auth.AuthResponse{
@@ -100,24 +113,28 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*au
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*auth.AuthResponse, error) {
 	claims, err := s.tokenProvider.ValidateRefreshToken(ctx, refreshToken)
 	if err != nil {
-		return nil, domain.ErrInvalidToken
+		shared.Log.Error("validate refresh token failed", zap.Error(err))
+		return nil, shared.ErrUnauthorized.WithDetails("invalid refresh token").WithDetails(err.Error())
 	}
 
 	// Verify user still exists
 	user, err := s.userService.GetUserByID(ctx, claims.UserID)
 	if err != nil {
-		return nil, domain.ErrUserNotFound
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", claims.UserID))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
 	}
 
 	// Generate new tokens
 	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
 	}
 
 	newRefreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
 	if err != nil {
-		return nil, err
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
 	}
 
 	return &auth.AuthResponse{
@@ -153,15 +170,18 @@ func (s *AuthService) ValidateToken(ctx context.Context, token string) (*domain.
 func (s *AuthService) ChangePassword(ctx context.Context, userID uint, currentPassword, newPassword string) error {
 	user, err := s.userService.GetUserByID(ctx, userID)
 	if err != nil {
-		return err
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", userID))
+		return shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
 	}
 	if !user.CheckPassword(currentPassword) {
-		return domain.ErrInvalidCredentials
+		shared.Log.Debug("invalid credentials", zap.String("username", user.Username))
+		return shared.ErrInvalidCredentials
 	}
 
 	// Set new password
 	if err := user.SetPassword(newPassword); err != nil {
-		return err
+		shared.Log.Error("password must be at least 8 characters", zap.Error(err), zap.String("hashed password", newPassword))
+		return shared.ErrValidation.WithDetails("password must be at least 8 characters").WithDetails(err.Error())
 	}
 
 	return s.userRepo.UpdatePassword(ctx, userID, user.PasswordHash)

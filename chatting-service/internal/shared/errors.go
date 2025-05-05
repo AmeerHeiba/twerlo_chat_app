@@ -3,124 +3,158 @@ package shared
 import (
 	"errors"
 	"net/http"
+
+	"gorm.io/gorm"
 )
 
-// Error Codes (Machine-readable)
 const (
-	CodeUserNotFound         = "USER_NOT_FOUND"
-	CodeUserExists           = "USER_EXISTS"
-	CodeInvalidCreds         = "INVALID_CREDENTIALS"
-	CodeWeakPassword         = "WEAK_PASSWORD"
-	CodeDBConnection         = "DB_CONNECTION_FAILED"
-	CodeInternal             = "INTERNAL_ERROR"
-	CodeInvalidUsername      = "INVALID_USERNAME"
-	CodeMessageNotFound      = "MESSAGE_NOT_FOUND"
-	CodeInvalidMessageType   = "INVALID_MESSAGE_TYPE"
-	CodeInvalidMessageStatus = "INVALID_MESSAGE_STATUS"
+	EmailRegexPattern = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
 )
 
-// Domain Errors (Business Rules)
-var (
-	ErrUsernameTooShort     = errors.New("user name should be longer than 3 letters")
-	ErrInvalidEmail         = errors.New("invalid email")
-	ErrWeakPassword         = errors.New("password must be at least 8 characters")
-	ErrUserNotFound         = errors.New("user not found")
-	ErrUserAlreadyExists    = errors.New("user already exists")
-	ErrInvalidCredentials   = errors.New("invalid credentials")
-	ErrEmptyMessage         = errors.New("message must contain text or media")
-	ErrMessageTooLong       = errors.New("message exceeds 1000 character limit")
-	ErrInvalidMediaURL      = errors.New("invalid media URL format")
-	ErrInvalidRecipient     = errors.New("direct messages require exactly one recipient")
-	ErrInvalidBroadcast     = errors.New("broadcasts cannot have direct recipient")
-	ErrMissingRecOrSenderID = errors.New("both message and user IDs are required")
-	ErrNoRecipients         = errors.New("message requires at least one recipient")
-	ErrDirectMessageNoList  = errors.New("direct messages should not specify recipients list")
-	ErrTest                 = errors.New("place - holder for now ")
-	ErrUserExists           = errors.New("User already exists")
-	ErrDatabaseConnection   = errors.New("database connection failed")
-	ErrFileUploadFailed     = errors.New("file upload failed")
-	ErrEmailExists          = errors.New("email already exists")
-	ErrMessageNotFound      = errors.New("message not found")
-	ErrInvalidMessageType   = errors.New("invalid message type")
-	ErrInvalidMessageStatus = errors.New("invalid message status")
-)
-
-// HTTP Error Responses
-type HTTPError struct {
-	Status  int         `json:"status"`
-	Code    string      `json:"code"`
-	Message string      `json:"message"`
+type Error struct {
+	Code    string      `json:"code"`    // Machine-readable code
+	Message string      `json:"message"` // Human-readable message
+	Status  int         `json:"-"`       // HTTP status code
 	Details interface{} `json:"details,omitempty"`
 }
 
-func ToHTTPError(err error) HTTPError {
-	switch {
-	case errors.Is(err, ErrUserNotFound):
-		return HTTPError{
-			Status:  http.StatusNotFound,
-			Code:    CodeUserNotFound,
-			Message: "User not found",
-		}
-	case errors.Is(err, ErrUserAlreadyExists):
-		return HTTPError{
-			Status:  http.StatusConflict,
-			Code:    CodeUserExists,
-			Message: "Username already taken",
-		}
-	case errors.Is(err, ErrWeakPassword):
-		return HTTPError{
-			Status:  http.StatusBadRequest,
-			Code:    CodeWeakPassword,
-			Message: "Password must be at least 8 characters",
-		}
-	case errors.Is(err, ErrUserExists):
-		return HTTPError{
-			Status:  http.StatusConflict,
-			Code:    CodeUserExists,
-			Message: "User already exists",
-		}
+func (e Error) Error() string {
+	return e.Message
+}
 
-	case errors.Is(err, ErrUsernameTooShort):
-		return HTTPError{
-			Status:  http.StatusBadRequest,
-			Code:    CodeInvalidUsername,
-			Message: "Username must be at least 3 characters",
-		}
-	case errors.Is(err, ErrMessageNotFound):
-		return HTTPError{
-			Status:  http.StatusNotFound,
-			Code:    CodeMessageNotFound,
-			Message: "Message not found",
-		}
-	case errors.Is(err, ErrInvalidMessageType):
-		return HTTPError{
-			Status:  http.StatusBadRequest,
-			Code:    CodeInvalidMessageType,
-			Message: "Invalid message type",
-		}
-	case errors.Is(err, ErrInvalidMessageStatus):
-		return HTTPError{
-			Status:  http.StatusBadRequest,
-			Code:    CodeInvalidMessageStatus,
-			Message: "Invalid message status",
-		}
-	case errors.Is(err, ErrInvalidRecipient):
-		return HTTPError{
-			Status:  http.StatusBadRequest,
-			Code:    "INVALID_RECIPIENT",
-			Message: "Direct messages require exactly one recipient",
-		}
-	default:
-		return HTTPError{
-			Status:  http.StatusInternalServerError,
-			Code:    CodeInternal,
-			Message: "Internal server error",
-		}
+func (e Error) WithDetails(details interface{}) Error {
+	return Error{
+		Code:    e.Code,
+		Message: e.Message,
+		Status:  e.Status,
+		Details: details,
 	}
 }
 
-// WithDetails adds additional error context
-func (e HTTPError) WithDetails(details interface{}) HTTPError {
-	e.Details = details
-	return e
+// Predefined common errors
+var (
+	// 4xx Errors
+	ErrBadRequest = Error{
+		Code:    "BAD_REQUEST",
+		Message: "Invalid request",
+		Status:  http.StatusBadRequest,
+	}
+
+	ErrUnauthorized = Error{
+		Code:    "UNAUTHORIZED",
+		Message: "Not authorized",
+		Status:  http.StatusUnauthorized,
+	}
+
+	ErrForbidden = Error{
+		Code:    "FORBIDDEN",
+		Message: "Access denied",
+		Status:  http.StatusForbidden,
+	}
+
+	ErrNotFound = Error{
+		Code:    "NOT_FOUND",
+		Message: "Resource not found",
+		Status:  http.StatusNotFound,
+	}
+	ErrConflict = Error{
+		Code:    "CONFLICT",
+		Message: "Resource already exists",
+		Status:  http.StatusConflict,
+	}
+
+	// Validation Errors
+	ErrValidation = Error{
+		Code:    "VALIDATION_ERROR",
+		Message: "Validation failed",
+		Status:  http.StatusBadRequest,
+	}
+
+	ErrUsernameTooShort = Error{
+		Code:    "USERNAME_TOO_SHORT",
+		Message: "Username must be at least 3 characters",
+		Status:  http.StatusBadRequest,
+	}
+	ErrInvalidEmailFormat = Error{
+		Code:    "INVALID_EMAIL_FORMAT",
+		Message: "Email must be a valid format",
+		Status:  http.StatusBadRequest,
+	}
+	ErrPasswordTooWeak = Error{
+		Code:    "PASSWORD_TOO_WEAK",
+		Message: "Password must be at least 8 characters",
+		Status:  http.StatusBadRequest,
+	}
+
+	// 5xx Errors
+	ErrInternalServer = Error{
+		Code:    "INTERNAL_ERROR",
+		Message: "Internal server error",
+		Status:  http.StatusInternalServerError,
+	}
+
+	// Domain-specific errors
+	ErrUserNotFound = Error{
+		Code:    "USER_NOT_FOUND",
+		Message: "User not found",
+		Status:  http.StatusNotFound,
+	}
+
+	ErrUserExists = Error{
+		Code:    "USER_EXISTS",
+		Message: "User already exists",
+		Status:  http.StatusConflict,
+	}
+
+	ErrInvalidCredentials = Error{
+		Code:    "INVALID_CREDENTIALS",
+		Message: "Invalid username or password",
+		Status:  http.StatusUnauthorized,
+	}
+
+	ErrWeakPassword = Error{
+		Code:    "WEAK_PASSWORD",
+		Message: "Password must be at least 8 characters",
+		Status:  http.StatusBadRequest,
+	}
+
+	// Database errors
+	ErrDatabaseOperation = Error{
+		Code:    "DATABASE_ERROR",
+		Message: "Database operation failed",
+		Status:  http.StatusInternalServerError,
+	}
+
+	ErrRecordNotFound = Error{
+		Code:    "RECORD_NOT_FOUND",
+		Message: "Record not found",
+		Status:  http.StatusNotFound,
+	}
+
+	ErrDuplicateEntry = Error{
+		Code:    "DUPLICATE_ENTRY",
+		Message: "Duplicate entry",
+		Status:  http.StatusConflict,
+	}
+
+	//Generic
+	ErrRateLimited = Error{
+		Code:    "RATE_LIMITED",
+		Message: "Too many requests",
+		Status:  http.StatusTooManyRequests,
+	}
+	ErrServiceUnavailable = Error{
+		Code:    "SERVICE_UNAVAILABLE",
+		Message: "Service temporarily unavailable",
+		Status:  http.StatusServiceUnavailable,
+	}
+)
+
+// Helper to convert third-party errors to the local error type
+func NormalizeError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrRecordNotFound
+	}
+
+	return err
 }

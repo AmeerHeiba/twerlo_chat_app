@@ -1,0 +1,3671 @@
+// FILE: ./cmd/api/main.go
+
+package main
+
+import (
+	"log"
+	"os"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/middleware"
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/routes"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
+	"gorm.io/gorm"
+)
+
+func main() {
+	// Load environment
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found")
+	}
+
+	// Initialize core dependencies
+	db := initDB()
+	app := fiber.New()
+	shared.InitLogger(os.Getenv("APP_ENV"))
+	app.Use(middleware.RequestContext())
+	app.Use(middleware.ErrorHandler)
+
+	// Initialize services and handlers
+	deps := initDependencies(db)
+
+	// Setup all routes
+	routes.SetupRoutes(app, deps)
+
+	//Not found route
+	app.Use(func(c *fiber.Ctx) error {
+		return c.Status(404).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Endpoint not found",
+			"path":    c.Path(),
+		})
+	})
+	// Start server
+	startServer(app)
+}
+
+func initDB() *gorm.DB {
+	db, err := config.NewDBConnection(config.LoadDBConfig())
+	if err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
+	return db
+}
+
+func initDependencies(db *gorm.DB) routes.Dependencies {
+	// Repositories
+	userRepo := database.NewUserRepository(db)
+	messageRepo := database.NewMessageRepository(db)
+	messageRecipientRepo := database.NewMessageRecipientRepository(db)
+
+	// Services
+	userService := application.NewUserService(userRepo)
+	authCfg := config.LoadAuthConfig()
+	jwtProvider := auth.NewJWTProvider(authCfg)
+	authService := application.NewAuthService(userRepo, userService, jwtProvider)
+	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil)
+
+	// Handlers
+	return routes.Dependencies{
+		DB:             db,
+		UserHandler:    handlers.NewUserHandler(userService),
+		AuthHandler:    handlers.NewAuthHandler(authService),
+		MessageHandler: handlers.NewMessageHandler(messageService),
+		JWTProvider:    jwtProvider,
+	}
+}
+
+func startServer(app *fiber.App) {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Starting server on port %s", port)
+	if err := app.Listen(":" + port); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
+}
+
+
+// ===== END OF ./cmd/api/main.go =====
+
+
+// FILE: ./cmd/migrate/main.go
+
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"gorm.io/gorm"
+)
+
+func main() {
+	dbConfig := config.LoadDBConfig()
+	db, err := config.NewDBConnection(dbConfig)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	if err := runMigrations(db); err != nil {
+		log.Fatalf("Migrations failed: %v", err)
+	}
+
+	log.Println("Migrations completed successfully")
+}
+
+func runMigrations(db *gorm.DB) error {
+	// Enable UUID extension
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"").Error; err != nil {
+		return fmt.Errorf("failed to create UUID extension: %w", err)
+	}
+
+	// Create enum types first
+	enums := []string{
+		`CREATE TYPE message_status AS ENUM ('sent', 'delivered', 'read')`,
+		`CREATE TYPE user_status AS ENUM ('online', 'offline', 'away')`,
+		`CREATE TYPE message_type AS ENUM ('direct', 'broadcast')`,
+	}
+
+	for _, e := range enums {
+		if err := db.Exec(e).Error; err != nil {
+			log.Printf("Note: Enum creation error (might already exist): %v", err)
+		}
+	}
+
+	// Migrate models
+	models := []interface{}{
+		&domain.User{},
+		&domain.Message{},
+		&domain.MessageRecipient{},
+	}
+
+	for _, model := range models {
+		if err := db.AutoMigrate(model); err != nil {
+			return fmt.Errorf("failed to migrate %T: %w", model, err)
+		}
+	}
+
+	return nil
+}
+
+
+// ===== END OF ./cmd/migrate/main.go =====
+
+
+// FILE: ./internal/application/auth_service.go
+
+package application
+
+import (
+	"context"
+	"strings"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+)
+
+type AuthService struct {
+	userRepo      domain.UserRepository
+	userService   *UserService
+	tokenProvider domain.TokenProvider
+}
+
+func NewAuthService(
+	repo domain.UserRepository,
+	userService *UserService,
+	provider domain.TokenProvider,
+) *AuthService {
+	return &AuthService{
+		userRepo:      repo,
+		userService:   userService,
+		tokenProvider: provider,
+	}
+}
+
+func (s *AuthService) Register(ctx context.Context, username, email, password string) (*auth.AuthResponse, error) {
+	// Create user through service (includes validation)
+	user, err := s.userService.CreateUser(ctx, username, email, password)
+	if err != nil {
+		shared.Log.Error("create user failed",
+			zap.String("operation", "Create"),
+			zap.Error(err),
+			zap.String("username", username),
+			zap.String("email", email),
+			zap.String("password_hash", user.PasswordHash))
+		return nil, shared.ErrDatabaseOperation.WithDetails("create user failed").WithDetails(err.Error())
+	}
+
+	// Generate tokens
+	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
+	}
+
+	refreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
+	}
+
+	return &auth.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresIn:    int(s.tokenProvider.GetAccessExpiry().Seconds()),
+		TokenType:    "Bearer",
+		UserID:       user.ID,
+		Username:     user.Username,
+		Email:        user.Email,
+	}, nil
+}
+
+func (s *AuthService) Login(ctx context.Context, username, password string) (*auth.AuthResponse, error) {
+
+	// Trim input first
+	username = strings.TrimSpace(username)
+
+	if len(username) < 3 {
+		shared.Log.Debug("username must be at least 3 characters long", zap.String("username", username))
+		return nil, shared.ErrBadRequest.WithDetails("Invalid username")
+	}
+
+	user, err := s.userService.VerifyCredentials(ctx, username, password)
+	if err != nil {
+		shared.Log.Error("verify credentials failed", zap.Error(err), zap.String("username", username))
+		return nil, shared.ErrValidation.WithDetails("invalid credentials").WithDetails(err.Error())
+	}
+
+	// Update last active
+	if err := s.userService.UpdateUserLastActive(ctx, user.ID); err != nil {
+		shared.Log.Error("update user last active failed", zap.Error(err), zap.Uint("userID", user.ID))
+		return nil, shared.ErrDatabaseOperation.WithDetails("update user last active failed").WithDetails(err.Error())
+	}
+
+	// Generate tokens
+	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
+	}
+
+	refreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
+	}
+
+	return &auth.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresIn:    int(s.tokenProvider.GetAccessExpiry().Seconds()),
+		TokenType:    "Bearer",
+		UserID:       user.ID,
+		Username:     user.Username,
+		Email:        user.Email,
+	}, nil
+}
+
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*auth.AuthResponse, error) {
+	claims, err := s.tokenProvider.ValidateRefreshToken(ctx, refreshToken)
+	if err != nil {
+		shared.Log.Error("validate refresh token failed", zap.Error(err))
+		return nil, shared.ErrUnauthorized.WithDetails("invalid refresh token").WithDetails(err.Error())
+	}
+
+	// Verify user still exists
+	user, err := s.userService.GetUserByID(ctx, claims.UserID)
+	if err != nil {
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", claims.UserID))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
+	}
+
+	// Generate new tokens
+	accessToken, err := s.tokenProvider.GenerateToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate token failed").WithDetails(err.Error())
+	}
+
+	newRefreshToken, err := s.tokenProvider.GenerateRefreshToken(ctx, user)
+	if err != nil {
+		shared.Log.Error("generate refresh token failed", zap.Error(err))
+		return nil, shared.ErrInternalServer.WithDetails("generate refresh token failed").WithDetails(err.Error())
+	}
+
+	return &auth.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+		ExpiresIn:    int(s.tokenProvider.GetAccessExpiry().Seconds()),
+		TokenType:    "Bearer",
+		UserID:       user.ID,
+		Username:     user.Username,
+		Email:        user.Email,
+	}, nil
+}
+
+func (s *AuthService) Logout(ctx context.Context, token string) error {
+	// In a JWT system, you would typically:
+	// 1. Add token to blacklist
+	// 2. Clear client-side tokens
+	// 3. For immediate invalidation
+	//    - Shorten token expiry
+	//    - Implement token blacklisting
+	//    - Use refresh token rotation
+
+	// For now, I'll just validate the token to ensure it was valid
+	//TILL I DECIDE LATER BASED ON TIM LINE
+	_, err := s.tokenProvider.ValidateToken(ctx, token)
+	return err
+}
+
+func (s *AuthService) ValidateToken(ctx context.Context, token string) (*domain.TokenClaims, error) {
+	return s.tokenProvider.ValidateToken(ctx, token)
+}
+
+func (s *AuthService) ChangePassword(ctx context.Context, userID uint, currentPassword, newPassword string) error {
+	user, err := s.userService.GetUserByID(ctx, userID)
+	if err != nil {
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", userID))
+		return shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
+	}
+	if !user.CheckPassword(currentPassword) {
+		shared.Log.Debug("invalid credentials", zap.String("username", user.Username))
+		return shared.ErrInvalidCredentials
+	}
+
+	// Set new password
+	if err := user.SetPassword(newPassword); err != nil {
+		shared.Log.Error("password must be at least 8 characters", zap.Error(err), zap.String("hashed password", newPassword))
+		return shared.ErrValidation.WithDetails("password must be at least 8 characters").WithDetails(err.Error())
+	}
+
+	return s.userRepo.UpdatePassword(ctx, userID, user.PasswordHash)
+}
+
+
+// ===== END OF ./internal/application/auth_service.go =====
+
+
+// FILE: ./internal/application/message_service.go
+
+package application
+
+import (
+	"context"
+	"strings"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+)
+
+type MessageService struct {
+	messageRepo          domain.MessageRepository
+	messageRecipientRepo domain.MessageRecipientRepository
+	userRepo             domain.UserRepository
+	notifier             domain.MessageNotifier // Optional for real-time
+}
+
+func NewMessageService(
+	messageRepo domain.MessageRepository,
+	messageRecipientRepo domain.MessageRecipientRepository,
+	userRepo domain.UserRepository,
+	notifier domain.MessageNotifier,
+) *MessageService {
+	return &MessageService{
+		messageRepo:          messageRepo,
+		messageRecipientRepo: messageRecipientRepo,
+		userRepo:             userRepo,
+		notifier:             notifier,
+	}
+}
+
+func (s *MessageService) SendDirectMessage(ctx context.Context, senderID, recipientID uint, content string, mediaURL string) (*domain.Message, error) {
+	// Validate recipient exists
+	if exists, err := s.userRepo.Exists(ctx, recipientID); err != nil {
+		shared.Log.Error("user exists check failed",
+			zap.String("operation", "SendDirectMessage"),
+			zap.Uint("recipientID", recipientID),
+			zap.Uint("senderID", senderID),
+			zap.Error(err))
+		return nil, err
+	} else if !exists {
+		shared.Log.Error("user not found",
+			zap.String("operation", "SendDirectMessage"),
+			zap.Uint("recipientID", recipientID),
+			zap.Uint("senderID", senderID))
+		return nil, err
+	}
+	// Validate content
+	if strings.TrimSpace(content) == "" && mediaURL == "" {
+		shared.Log.Debug("Invalid or empty message content",
+			zap.String("operation", "SendDirectMessage"),
+			zap.Uint("recipientID", recipientID),
+			zap.Uint("senderID", senderID),
+			zap.String("content", content))
+		return nil, shared.ErrValidation.WithDetails("Invalid or empty message content for direct message")
+	}
+
+	msg, err := s.messageRepo.Create(ctx, senderID, content, mediaURL, domain.MessageDirect)
+	if err != nil {
+		shared.Log.Error("create message failed",
+			zap.String("operation", "SendDirectMessage"),
+			zap.Uint("recipientID", recipientID),
+			zap.Uint("senderID", senderID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	// Update recipient association
+	if err := s.messageRepo.Update(ctx, msg.ID, &recipientID, nil); err != nil {
+		shared.Log.Error("update message failed",
+			zap.String("operation", "SendDirectMessage"),
+			zap.Uint("recipientID", recipientID),
+			zap.Uint("senderID", senderID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	// Notify recipient (if notifier is configured)
+	if s.notifier != nil {
+		if err := s.notifier.Notify(ctx, msg); err != nil {
+		}
+	}
+
+	return msg, nil
+}
+
+func (s *MessageService) SendBroadcast(ctx context.Context, broadcasterID uint, content string, mediaURL string, recipientIDs []uint) (*domain.Message, error) {
+	if len(recipientIDs) == 0 {
+		shared.Log.Warn("Invalid or empty recipient IDs", zap.Uint("broadcasterID", broadcasterID), zap.String("content", content), zap.String("mediaURL", mediaURL))
+		return nil, shared.ErrBadRequest.WithDetails("Invalid or empty recipient IDs")
+	}
+
+	// Validate all recipients exist first
+	for _, id := range recipientIDs {
+		if _, err := s.userRepo.FindByID(ctx, id); err != nil {
+			shared.Log.Error("user not found", zap.Uint("userID", id), zap.Error(err))
+			return nil, err
+		}
+	}
+
+	// Create message object (validation happens in CreateWithRecipients)
+	msg := &domain.Message{
+		SenderID:    broadcasterID,
+		Content:     content,
+		MediaURL:    mediaURL,
+		MessageType: domain.MessageBroadcast,
+		Status:      domain.StatusSent,
+	}
+
+	// Create message with recipients in one transaction
+	createdMsg, err := s.messageRepo.CreateWithRecipients(ctx, msg, recipientIDs)
+	if err != nil {
+		shared.Log.Error("create message with recipients failed", zap.Error(err))
+		return nil, err
+	}
+
+	// Reload the message with all relationships
+	fullMessage, err := s.messageRepo.FindByID(ctx, createdMsg.ID)
+	if err != nil {
+		shared.Log.Error("find message by ID failed", zap.Error(err))
+		return nil, err
+	}
+
+	// Notify recipients
+	if s.notifier != nil {
+		if err := s.notifier.Broadcast(ctx, fullMessage, recipientIDs); err != nil {
+		}
+	}
+
+	return fullMessage, nil
+}
+func (s *MessageService) GetConversation(ctx context.Context, user1ID, user2ID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	// Validate both users exist
+	if _, err := s.userRepo.FindByID(ctx, user1ID); err != nil {
+		shared.Log.Error("user not found", zap.Uint("userID", user1ID), zap.Error(err))
+		return nil, err
+	}
+	if _, err := s.userRepo.FindByID(ctx, user2ID); err != nil {
+		shared.Log.Error("user not found", zap.Uint("userID", user2ID), zap.Error(err))
+		return nil, err
+	}
+
+	messages, err := s.messageRepo.FindConversation(ctx, user1ID, user2ID, query)
+	if err != nil {
+		shared.Log.Error("find conversation failed",
+			zap.String("operation", "GetConversation"),
+			zap.Uint("user1ID", user1ID),
+			zap.Uint("user2ID", user2ID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (s *MessageService) GetMessageHistory(ctx context.Context, userID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	messages, err := s.messageRepo.FindUserMessages(ctx, userID, query)
+	if err != nil {
+		shared.Log.Error("find user messages failed",
+			zap.String("operation", "GetMessageHistory"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (s *MessageService) MarkAsDelivered(ctx context.Context, messageID uint) error {
+	if err := s.messageRepo.MarkAsDelivered(ctx, messageID); err != nil {
+		shared.Log.Error("mark message as delivered failed",
+			zap.String("operation", "MarkAsDelivered"),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (s *MessageService) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
+	if err := s.messageRepo.MarkAsRead(ctx, messageID, recipientID); err != nil {
+		shared.Log.Error("mark message as read failed",
+			zap.String("operation", "MarkAsRead"),
+			zap.Uint("messageID", messageID),
+			zap.Uint("recipientID", recipientID),
+			zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (s *MessageService) DeleteMessage(ctx context.Context, messageID uint, userID uint) error {
+	// Verify user has permission to delete (either sender or recipient)
+	msg, err := s.messageRepo.FindByID(ctx, messageID)
+	if err != nil {
+		shared.Log.Error("find message by ID failed",
+			zap.String("operation", "DeleteMessage"),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return err
+	}
+
+	if msg.SenderID != userID && (msg.RecipientID != nil && *msg.RecipientID != userID) {
+		shared.Log.Debug("invalid credentials",
+			zap.String("operation", "DeleteMessage"),
+			zap.Uint("messageID", messageID),
+			zap.Uint("userID", userID))
+		return shared.ErrInvalidCredentials
+	}
+
+	if err := s.messageRepo.Delete(ctx, messageID); err != nil {
+		shared.Log.Error("delete message failed",
+			zap.String("operation", "DeleteMessage"),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+
+// ===== END OF ./internal/application/message_service.go =====
+
+
+// FILE: ./internal/application/user_service.go
+
+package application
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type UserService struct {
+	userRepo domain.UserRepository
+}
+
+func NewUserService(repo domain.UserRepository) *UserService {
+	return &UserService{userRepo: repo}
+}
+
+func (s *UserService) CreateUser(ctx context.Context, username, email, password string) (*domain.User, error) {
+	// Check if user exists
+	exists, err := s.userRepo.ExistsByUsername(ctx, username)
+	if err != nil {
+		shared.Log.Error("username check failed", zap.Error(err), zap.String("username", username))
+		return nil, err
+	}
+	if exists {
+		shared.Log.Debug("username already exists", zap.String("username", username))
+		return nil, shared.ErrUserExists
+	}
+
+	// Create domain user
+	user := &domain.User{
+		Username: username,
+		Email:    email,
+	}
+
+	// Hash password
+	if err := user.SetPassword(password); err != nil {
+		shared.Log.Error("password must be at least 8 characters", zap.Error(err), zap.String("hashed password", password))
+		return nil, shared.ErrValidation.WithDetails("password must be at least 8 characters").WithDetails(err.Error())
+	}
+
+	// Persist user
+	createdUser, err := s.userRepo.Create(ctx, user.Username, user.Email, user.PasswordHash)
+	if err != nil {
+		shared.Log.Error("create user failed", zap.Error(err), zap.String("username", username), zap.String("email", email), zap.String("password_hash", user.PasswordHash))
+		return nil, err
+	}
+
+	return createdUser, nil
+}
+
+func (s *UserService) GetUserByID(ctx context.Context, id uint) (*domain.User, error) {
+	user, err := s.userRepo.FindByID(ctx, id)
+	if err != nil {
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", id))
+		return nil, err
+	}
+	return user, nil
+}
+
+func (s *UserService) GetUserProfile(ctx context.Context, id uint) (*domain.User, error) {
+	profile, err := s.userRepo.FindProfileByID(ctx, id)
+	if err != nil {
+		shared.Log.Error("find user profile by ID failed", zap.Error(err), zap.Uint("userID", id))
+		return nil, err
+	}
+	return profile, nil
+}
+
+func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
+	user, err := s.userRepo.FindByUsername(ctx, username)
+	if err != nil {
+		shared.Log.Error("find user by username failed", zap.Error(err), zap.String("username", username))
+		return nil, err
+	}
+	return user, nil
+}
+
+func (s *UserService) UpdateUserLastActive(ctx context.Context, userID uint) error {
+	err := s.userRepo.UpdateLastActiveAt(ctx, userID)
+	if err != nil {
+		shared.Log.Error("update user last active failed", zap.Error(err), zap.Uint("userID", userID))
+		return err
+	}
+	return nil
+}
+
+func (s *UserService) VerifyCredentials(ctx context.Context, username, password string) (*domain.User, error) {
+
+	user, err := s.userRepo.FindByUsername(ctx, username)
+	if err != nil {
+		shared.Log.Error("Failed to find user", zap.Error(err), zap.String("username", username))
+		return nil, err
+	}
+	// Direct password check without validation
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(user.PasswordHash),
+		[]byte(password),
+	); err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			shared.Log.Error("Password comparison failed", zap.Error(err), zap.String("username", username))
+			return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed").WithDetails(err.Error())
+		}
+		shared.Log.Error("Password comparison failed", zap.Error(err), zap.String("username", username))
+		return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed").WithDetails(err.Error())
+	}
+
+	return user, nil
+}
+
+func (s *UserService) UpdateProfile(ctx context.Context, userID uint, username, email string) (*domain.User, error) {
+	// Input validation (e.g., email format, username length)
+	if username != "" && len(username) < 3 {
+		shared.Log.Debug("username must be at least 3 characters long", zap.String("username", username))
+		return nil, shared.ErrValidation.WithDetails("username must be at least 3 characters long")
+	}
+	if email != "" && !strings.Contains(email, "@") {
+		shared.Log.Debug("invalid email format", zap.String("email", email))
+		return nil, shared.ErrValidation.WithDetails("invalid email format")
+	}
+
+	// Delegate to repository
+	if err := s.userRepo.Update(ctx, userID, username, email); err != nil {
+		shared.Log.Error("update user failed", zap.Error(err), zap.Uint("userID", userID), zap.String("username", username), zap.String("email", email))
+		return nil, err
+	}
+
+	updatedProfile, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		shared.Log.Error("find user by ID failed", zap.Error(err), zap.Uint("userID", userID))
+		return nil, err
+	}
+
+	return updatedProfile, nil
+}
+
+func (s *UserService) GetMessageHistory(ctx context.Context, userID uint, limit, offset int) ([]domain.Message, int64, error) {
+	// I'll implement this fully after I create the message logic
+	// For now just the signature
+	return nil, 0, nil
+}
+
+
+// ===== END OF ./internal/application/user_service.go =====
+
+
+// FILE: ./internal/config/auth.go
+
+package config
+
+import (
+	"os"
+	"time"
+)
+
+type AuthConfig struct {
+	JWTSecret          string
+	AccessTokenExpiry  time.Duration // e.g., 15 minutes
+	RefreshTokenExpiry time.Duration // e.g., 7 days
+}
+
+func LoadAuthConfig() AuthConfig {
+	return AuthConfig{
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		AccessTokenExpiry:  time.Minute * 15,
+		RefreshTokenExpiry: time.Hour * 24 * 7,
+	}
+}
+
+
+// ===== END OF ./internal/config/auth.go =====
+
+
+// FILE: ./internal/config/database.go
+
+package config
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/joho/godotenv"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+type DBConfig struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
+}
+
+func LoadDBConfig() DBConfig {
+	// Try to load .env file (won't error if not found)
+	godotenv.Load()
+
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = "localhost" // Default for local dev
+	}
+
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5433" // Default local port
+	}
+
+	return DBConfig{
+		Host:     host,
+		Port:     port,
+		User:     getEnvWithDefault("DB_USER", "postgres"),
+		Password: getEnvWithDefault("DB_PASSWORD", "postgres"),
+		DBName:   getEnvWithDefault("DB_NAME", "chatting_service"),
+		SSLMode:  "disable",
+	}
+}
+
+func getEnvWithDefault(key, defaultValue string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	return val
+}
+
+func NewDBConnection(config DBConfig) (*gorm.DB, error) {
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		config.Host, config.Port, config.User, config.Password, config.DBName, config.SSLMode,
+	)
+
+	gormConfig := &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
+		NowFunc: func() time.Time {
+			return time.Now().UTC()
+		},
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), gormConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get underlying DB: %w", err)
+	}
+
+	// Connection pool settings
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	log.Println("Successfully connected to database")
+	return db, nil
+}
+
+
+// ===== END OF ./internal/config/database.go =====
+
+
+// FILE: ./internal/delivery/http/handlers/auth_handler.go
+
+package handlers
+
+import (
+	"regexp"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+type AuthHandler struct {
+	authService *application.AuthService
+}
+
+func NewAuthHandler(authService *application.AuthService) *AuthHandler {
+	return &AuthHandler{authService: authService}
+}
+
+func (h *AuthHandler) Login(c *fiber.Ctx) error {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body").WithDetails(err.Error())
+	}
+
+	if body.Username == "" || body.Password == "" {
+		shared.Log.Debug("Invalid request body must have all fields", zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body must have all fields")
+	}
+
+	res, err := h.authService.Login(c.Context(), body.Username, body.Password)
+	if err != nil {
+		shared.Log.Error("Login failed", zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("Login failed").WithDetails(err.Error())
+	}
+
+	return c.JSON(res)
+}
+
+func (h *AuthHandler) Register(c *fiber.Ctx) error {
+	var body struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body").WithDetails(err.Error())
+	}
+
+	if body.Username == "" || body.Email == "" || body.Password == "" {
+		shared.Log.Debug("Invalid request body must have all fields", zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body must have all fields")
+	}
+
+	if len(body.Password) < 8 {
+		shared.Log.Debug("Password must be at least 8 characters long", zap.ByteString("body", c.Body()))
+		return shared.ErrValidation.WithDetails("Password must be at least 8 characters long")
+	}
+
+	emailRegex := regexp.MustCompile(shared.EmailRegexPattern)
+	if !emailRegex.MatchString(body.Email) {
+		shared.Log.Debug("Please provide a valid email address", zap.ByteString("body", c.Body()))
+		return shared.ErrInvalidEmailFormat.WithDetails("Please provide a valid email address")
+	}
+
+	res, err := h.authService.Register(c.Context(), body.Username, body.Email, body.Password)
+	if err != nil {
+		shared.Log.Error("Register failed", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(res)
+}
+
+func (h *AuthHandler) ChangePassword(c *fiber.Ctx) error {
+	claims, ok := c.Locals("userClaims").(*domain.TokenClaims)
+	if !ok || claims == nil {
+		shared.Log.Debug("Invalid user claims", zap.ByteString("body", c.Body()))
+		return shared.ErrUnauthorized.WithDetails("Invalid user claims")
+	}
+
+	var body auth.ChangePasswordRequest
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Debug("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body").WithDetails(err.Error())
+	}
+
+	if err := h.authService.ChangePassword(c.Context(), claims.UserID, body.CurrentPassword, body.NewPassword); err != nil {
+		shared.Log.Error("Change password failed", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Password updated successfully",
+	})
+}
+
+
+// ===== END OF ./internal/delivery/http/handlers/auth_handler.go =====
+
+
+// FILE: ./internal/delivery/http/handlers/message_handler.go
+
+package handlers
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/message"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+type MessageHandler struct {
+	messageService *application.MessageService
+}
+
+func NewMessageHandler(messageService *application.MessageService) *MessageHandler {
+	return &MessageHandler{messageService: messageService}
+}
+
+func (h *MessageHandler) SendMessage(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	var body message.SendRequest
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
+	}
+
+	// Additional validation
+	if body.Type == "direct" && body.RecipientID == 0 {
+		shared.Log.Debug("Missing recipient ID ",
+			zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check recipient ID")
+	}
+
+	var msg *domain.Message
+	var err error
+
+	switch body.Type {
+	case "direct":
+		msg, err = h.messageService.SendDirectMessage(
+			c.Context(),
+			claims.UserID,
+			body.RecipientID,
+			body.Content,
+			body.MediaURL,
+		)
+	case "broadcast":
+		shared.Log.Warn("Wrong broadcast endpoint", zap.String("url", c.OriginalURL()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body use broadcast endpoint for sending broadcast messages")
+	default:
+		shared.Log.Warn("Invalid message type", zap.String("type", body.Type))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check message type")
+	}
+
+	if err != nil {
+		shared.Log.Warn("Failed to send message", zap.Error(err), zap.ByteString("body", c.Body()))
+		return err
+	}
+
+	return c.JSON(toMessageResponse(msg))
+}
+
+func (h *MessageHandler) SendBroadcast(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	var body message.BroadcastRequest
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
+	}
+
+	// validation for recipient IDs
+	if len(body.RecipientIDs) == 0 {
+		shared.Log.Debug("No recipients", zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body check recipient IDs")
+	}
+
+	msg, err := h.messageService.SendBroadcast(
+		c.Context(),
+		claims.UserID,
+		body.Content,
+		body.MediaURL,
+		body.RecipientIDs,
+	)
+	if err != nil {
+		shared.Log.Error("Failed to send broadcast message", zap.Error(err), zap.ByteString("body", c.Body()))
+		return err
+	}
+
+	return c.JSON(toMessageResponse(msg))
+}
+
+func (h *MessageHandler) GetConversation(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+	otherUserID, err := c.ParamsInt("userID")
+	if err != nil {
+		shared.Log.Error("Invalid user ID", zap.Error(err), zap.String("userID", c.Params("userID")))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing user ID").WithDetails(err.Error())
+	}
+
+	var query message.QueryRequest
+	if err := c.QueryParser(&query); err != nil {
+		shared.Log.Error("Invalid conversation request query", zap.Error(err), zap.String("path", c.Path()),
+			zap.Any("query", map[string]interface{}{
+				"limit":  c.Query("limit"),
+				"offset": c.Query("offset"),
+				"before": c.Query("before"),
+			}))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing query params").WithDetails(err.Error())
+	}
+
+	messages, err := h.messageService.GetConversation(
+		c.Context(),
+		claims.UserID,
+		uint(otherUserID),
+		toDomainQuery(query),
+	)
+	if err != nil {
+		shared.Log.Error("Failed to get conversation", zap.Error(err))
+		return err
+	}
+
+	response := message.ConversationResponse{
+		Messages: make([]message.MessageResponse, len(messages)),
+	}
+	for i, msg := range messages {
+		response.Messages[i] = toMessageResponse(&msg)
+	}
+
+	return c.JSON(response)
+}
+
+func (h *MessageHandler) MarkAsRead(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+	messageID, err := c.ParamsInt("id")
+	if err != nil {
+		shared.Log.Error("Invalid message ID", zap.Error(err))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing message ID").WithDetails(err.Error())
+	}
+
+	if err := h.messageService.MarkAsRead(
+		c.Context(),
+		uint(messageID),
+		claims.UserID,
+	); err != nil {
+		shared.Log.Error("Failed to mark message as read", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Message marked as read",
+	})
+}
+
+func (h *MessageHandler) DeleteMessage(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+	messageID, err := c.ParamsInt("id")
+	if err != nil {
+		shared.Log.Error("Invalid message ID", zap.Error(err), zap.String("id", c.Params("id")))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing message ID").WithDetails(err.Error())
+	}
+
+	if err := h.messageService.DeleteMessage(
+		c.Context(),
+		uint(messageID),
+		claims.UserID,
+	); err != nil {
+		shared.Log.Error("Failed to delete message", zap.Error(err), zap.String("id", c.Params("id")))
+		return err
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Message deleted",
+	})
+}
+
+// Helpers
+func toDomainQuery(q message.QueryRequest) domain.MessageQuery {
+	return domain.MessageQuery{
+		Limit:       q.Limit,
+		Offset:      q.Offset,
+		Before:      q.Before,
+		After:       q.After,
+		MessageType: q.MessageType,
+		HasMedia:    q.HasMedia,
+		Status:      q.Status,
+	}
+}
+
+func toMessageResponse(m *domain.Message) message.MessageResponse {
+	resp := message.MessageResponse{
+		ID:       m.ID,
+		Content:  m.Content,
+		MediaURL: m.MediaURL,
+		Type:     string(m.MessageType),
+		Status:   string(m.Status),
+		SenderID: m.SenderID,
+		SentAt:   m.SentAt,
+	}
+
+	if m.RecipientID != nil {
+		resp.RecipientID = *m.RecipientID
+	}
+	if m.DeliveredAt != nil {
+		resp.DeliveredAt = *m.DeliveredAt
+	}
+	if m.ReadAt != nil {
+		resp.ReadAt = *m.ReadAt
+	}
+
+	return resp
+}
+
+
+// ===== END OF ./internal/delivery/http/handlers/message_handler.go =====
+
+
+// FILE: ./internal/delivery/http/handlers/user_handler.go
+
+package handlers
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/user"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+type UserHandler struct {
+	userService *application.UserService
+}
+
+func NewUserHandler(userService *application.UserService) *UserHandler {
+	return &UserHandler{userService: userService}
+}
+
+func (h *UserHandler) GetUserProfile(c *fiber.Ctx) error {
+	// Get user ID from JWT claims
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	profile, err := h.userService.GetUserProfile(c.Context(), claims.UserID)
+	if err != nil {
+		shared.Log.Error("Failed to get user profile", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(user.ProfileResponse{
+		ID:         profile.ID,
+		Username:   profile.Username,
+		Email:      profile.Email,
+		LastActive: profile.LastActiveAt,
+		Status:     string(profile.Status),
+	})
+}
+
+func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	var body user.UpdateProfileRequest
+	if err := c.BodyParser(&body); err != nil {
+		shared.Log.Error("Invalid update profile request body",
+			zap.Error(err),
+			zap.ByteString("body", c.Body()))
+		return shared.ErrBadRequest.WithDetails("Invalid request body failed to parse request body").WithDetails(err.Error())
+	}
+
+	updatedUser, err := h.userService.UpdateProfile(c.Context(), claims.UserID, body.Username, body.Email)
+	if err != nil {
+		shared.Log.Error("Failed to update user profile", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(user.ProfileResponse{
+		ID:         updatedUser.ID,
+		Username:   updatedUser.Username,
+		Email:      updatedUser.Email,
+		LastActive: updatedUser.LastActiveAt,
+		Status:     string(updatedUser.Status),
+	})
+}
+
+func (h *UserHandler) GetMessageHistory(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	var query user.MessageHistoryRequest
+	if err := c.QueryParser(&query); err != nil {
+		shared.Log.Error("Invalid message history request query", zap.Error(err), zap.Any("query", query))
+		return shared.ErrBadRequest.WithDetails("Invalid or missing query params").WithDetails(err.Error())
+	}
+
+	// Default values
+	if query.Limit == 0 {
+		query.Limit = 20
+		shared.Log.Debug("Using default limit", zap.Int("limit", query.Limit))
+	}
+
+	messages, total, err := h.userService.GetMessageHistory(c.Context(), claims.UserID, query.Limit, query.Offset)
+	if err != nil {
+		shared.Log.Error("Failed to get message history", zap.Error(err))
+		return err
+	}
+
+	response := user.MessageHistoryResponse{
+		Total:    total,
+		Messages: make([]user.MessageResponse, 0, len(messages)),
+	}
+
+	for _, msg := range messages {
+		response.Messages = append(response.Messages, user.MessageResponse{
+			ID:        msg.ID,
+			Content:   msg.Content,
+			CreatedAt: msg.CreatedAt,
+			Status:    string(msg.Status),
+			// Type:      string(msg.Type),
+		})
+	}
+
+	return c.JSON(response)
+}
+
+
+// ===== END OF ./internal/delivery/http/handlers/user_handler.go =====
+
+
+// FILE: ./internal/delivery/http/middleware/auth.go
+
+package middleware
+
+import (
+	"strings"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/gofiber/fiber/v2"
+)
+
+func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		authHeader := c.Get("Authorization")
+		if authHeader == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Authorization header missing",
+			})
+		}
+
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		claims, err := provider.ValidateToken(c.Context(), token)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Invalid token",
+			})
+		}
+
+		// Store claims in context for downstream handlers
+		c.Locals("userClaims", claims)
+		return c.Next()
+	}
+}
+
+
+// ===== END OF ./internal/delivery/http/middleware/auth.go =====
+
+
+// FILE: ./internal/delivery/http/middleware/context.go
+
+package middleware
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+)
+
+func RequestContext() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Generate request ID
+		requestID := uuid.New().String()
+		c.Set("X-Request-ID", requestID)
+
+		// Create contextual logger
+		logger := shared.Log.With(
+			zap.String("request_id", requestID),
+			zap.String("path", c.Path()),
+			zap.String("method", c.Method()),
+			zap.String("ip", c.IP()),
+		)
+		c.Locals("logger", logger)
+
+		return c.Next()
+	}
+}
+
+
+// ===== END OF ./internal/delivery/http/middleware/context.go =====
+
+
+// FILE: ./internal/delivery/http/middleware/error.go
+
+package middleware
+
+import (
+	"errors"
+
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+)
+
+func ErrorHandler(ctx *fiber.Ctx) error {
+	err := ctx.Next()
+
+	if err == nil {
+		return nil
+	}
+
+	logger := ctx.Locals("logger").(*zap.Logger)
+	var appErr shared.Error
+
+	if !errors.As(err, &appErr) {
+		appErr = shared.ErrInternalServer.WithDetails(err.Error())
+		logger.Error("Unhandled error",
+			zap.Error(err),
+			zap.String("path", ctx.Path()),
+			zap.ByteString("body", ctx.Body()))
+	} else {
+		logLevel := zapcore.ErrorLevel
+		if appErr.Status < 500 {
+			logLevel = zapcore.DebugLevel
+		}
+
+		logger.Log(logLevel, "Request error",
+			zap.Error(err),
+			zap.String("path", ctx.Path()),
+			zap.Int("status", appErr.Status),
+			zap.Any("details", appErr.Details))
+	}
+
+	return ctx.Status(appErr.Status).JSON(appErr)
+}
+
+
+// ===== END OF ./internal/delivery/http/middleware/error.go =====
+
+
+// FILE: ./internal/delivery/http/middleware/recovery.go
+
+package middleware
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+func Recovery() fiber.Handler {
+	return func(c *fiber.Ctx) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger, ok := c.Locals("logger").(*zap.Logger)
+				if !ok {
+					logger = shared.Log
+				}
+
+				logger.Error("Recovered from panic",
+					zap.Any("panic", r),
+					zap.Stack("stack"))
+
+				err = shared.ErrInternalServer.WithDetails("internal server error")
+			}
+		}()
+
+		return c.Next()
+	}
+}
+
+
+// ===== END OF ./internal/delivery/http/middleware/recovery.go =====
+
+
+// FILE: ./internal/delivery/http/routes/auth.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/gofiber/fiber/v2"
+)
+
+func SetupAuthRoutes(app *fiber.App, handler *handlers.AuthHandler, authMiddleware fiber.Handler) {
+	auth := app.Group("/api/auth")
+	auth.Post("/login", handler.Login)
+	auth.Post("/register", handler.Register)
+
+	// protected
+	protected := auth.Group("", authMiddleware)
+	protected.Put("/password", handler.ChangePassword)
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/auth.go =====
+
+
+// FILE: ./internal/delivery/http/routes/health.go
+
+package routes
+
+import (
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+func SetupHealthRoutes(app *fiber.App, db *gorm.DB) {
+	app.Get("/api/health", func(c *fiber.Ctx) error {
+		logger := c.Locals("logger").(*zap.Logger)
+		start := time.Now()
+
+		sqlDB, err := db.DB()
+		if err != nil {
+			logger.Error("Database connection failed",
+				zap.Error(err),
+				zap.Duration("latency", time.Since(start)))
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "error"})
+		}
+
+		if err := sqlDB.Ping(); err != nil {
+			logger.Error("Database ping failed",
+				zap.Error(err),
+				zap.Duration("latency", time.Since(start)))
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "error"})
+		}
+
+		logger.Info("Health check succeeded",
+			zap.Duration("latency", time.Since(start)))
+		return c.JSON(fiber.Map{"status": "ok"})
+	})
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/health.go =====
+
+
+// FILE: ./internal/delivery/http/routes/message.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/gofiber/fiber/v2"
+)
+
+func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, authMiddleware fiber.Handler) {
+	messageGroup := app.Group("/api/messages", authMiddleware)
+
+	messageGroup.Post("/", handler.SendMessage)
+	messageGroup.Post("/broadcast", handler.SendBroadcast)
+	messageGroup.Get("/conversation/:userID", handler.GetConversation)
+	messageGroup.Put("/:id/read", handler.MarkAsRead)
+	messageGroup.Delete("/:id", handler.DeleteMessage)
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/message.go =====
+
+
+// FILE: ./internal/delivery/http/routes/routes.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/middleware"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
+)
+
+type Dependencies struct {
+	DB             *gorm.DB
+	UserHandler    *handlers.UserHandler
+	AuthHandler    *handlers.AuthHandler
+	MessageHandler *handlers.MessageHandler
+	JWTProvider    domain.TokenProvider
+}
+
+func SetupRoutes(app *fiber.App, deps Dependencies) {
+	// Health route (no auth)
+	SetupHealthRoutes(app, deps.DB)
+
+	// Auth routes (no auth)
+	SetupAuthRoutes(app, deps.AuthHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+
+	// Profile routes (protected)
+	SetupUserRoutes(app, deps.UserHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+
+	// Message routes (protected)
+	SetupMessageRoutes(app, deps.MessageHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/routes.go =====
+
+
+// FILE: ./internal/delivery/http/routes/user.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/gofiber/fiber/v2"
+)
+
+func SetupUserRoutes(app *fiber.App, handler *handlers.UserHandler, authMiddleware fiber.Handler) {
+	user := app.Group("/api/users", authMiddleware)
+	user.Get("/profile", handler.GetUserProfile)
+	user.Put("/profile", handler.UpdateProfile)
+	user.Get("/messages", handler.GetMessageHistory)
+
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/user.go =====
+
+
+// FILE: ./internal/domain/auth.go
+
+package domain
+
+import jwt "github.com/golang-jwt/jwt/v5"
+
+type TokenClaims struct {
+	jwt.RegisteredClaims
+	UserID    uint   `json:"user_id"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	SessionID string `json:"sid,omitempty"`
+	IsRefresh bool   `json:"is_refresh,omitempty"` // Distinguish refresh tokens
+}
+
+
+// ===== END OF ./internal/domain/auth.go =====
+
+
+// FILE: ./internal/domain/enums.go
+
+package domain
+
+type MessageStatus string
+
+const (
+	StatusSent      MessageStatus = "sent"
+	StatusDelivered MessageStatus = "delivered"
+	StatusRead      MessageStatus = "read"
+	StatusFailed    MessageStatus = "failed"
+)
+
+type UserStatus string
+
+const (
+	UserOnline  UserStatus = "online"
+	UserOffline UserStatus = "offline"
+	UserAway    UserStatus = "away"
+)
+
+type MessageType string
+
+const (
+	MessageDirect    MessageType = "direct"
+	MessageBroadcast MessageType = "broadcast"
+)
+
+
+// ===== END OF ./internal/domain/enums.go =====
+
+
+// FILE: ./internal/domain/errors.go
+
+package domain
+
+import "errors"
+
+var (
+	ErrUserNotFound         = errors.New("user not found")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrWeakPassword         = errors.New("weak password")
+	ErrInvalidEmail         = errors.New("invalid email")
+	ErrInvalidToken         = errors.New("invalid token")
+	ErrUsernameTooShort     = errors.New("user name should be longer than 3 letters")
+	ErrEmptyMessage         = errors.New("message must contain text or media")
+	ErrMessageTooLong       = errors.New("message exceeds 1000 character limit")
+	ErrInvalidMediaURL      = errors.New("invalid media URL format")
+	ErrInvalidRecipient     = errors.New("direct messages require exactly one recipient")
+	ErrInvalidBroadcast     = errors.New("broadcasts cannot have direct recipient")
+	ErrNoRecipients         = errors.New("message requires at least one recipient")
+	ErrMessageNotFound      = errors.New("message not found")
+	ErrInvalidMessageType   = errors.New("invalid message type")
+	ErrInvalidMessageStatus = errors.New("invalid message status")
+	ErrUserExists           = errors.New("User already exists")
+	ErrMissingRecOrSenderID = errors.New("both message and user IDs are required")
+	ErrDirectMessageNoList  = errors.New("direct messages should not specify recipients list")
+	ErrInvalidRecipientID   = errors.New("invalid recipient ID")
+	ErrInvalidSenderID      = errors.New("invalid sender ID")
+	ErrEmailExists          = errors.New("email already exists")
+	ErrUserAlreadyExists    = errors.New("user already exists")
+)
+
+
+// ===== END OF ./internal/domain/errors.go =====
+
+
+// FILE: ./internal/domain/media.go
+
+package domain
+
+import (
+	"io"
+	"time"
+)
+
+type MediaUpload struct {
+	File        io.Reader `validate:"required"`
+	Filename    string    `validate:"required,min=1,max=255"`
+	ContentType string    `validate:"required,oneof=image/jpeg image/png application/pdf"`
+	Size        int64     `validate:"required,min=1,max=10485760"` // 10MB max
+	UserID      uint      `validate:"required"`
+}
+type MediaResponse struct {
+	URL         string    `json:"url"`
+	Size        int64     `json:"size"`
+	ContentType string    `json:"content_type"`
+	UploadedAt  time.Time `json:"uploaded_at"`
+	ExpiresAt   time.Time `json:"expires_at,omitempty"` // For temporary URLs "future enhancment"
+}
+
+
+// ===== END OF ./internal/domain/media.go =====
+
+
+// FILE: ./internal/domain/message.go
+
+package domain
+
+import (
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+type Message struct {
+	gorm.Model
+	Content     string        `gorm:"type:text"`
+	MediaURL    string        `gorm:"type:varchar(255)"`
+	MessageType MessageType   `gorm:"type:message_type;default:'direct'"`
+	Status      MessageStatus `gorm:"type:message_status;default:'sent'"`
+
+	// Relationships
+	//Using foreign keys and gorm models to allow eager/lazy loading
+	SenderID uint `gorm:"index"` // Foreign key to User
+	Sender   User `gorm:"foreignKey:SenderID"`
+
+	RecipientID *uint `gorm:"index;null"` // Null for broadcasts
+	Recipient   *User `gorm:"foreignKey:RecipientID"`
+
+	BroadcasterID *uint `gorm:"index;null"` // For broadcast origin
+	Broadcaster   *User `gorm:"foreignKey:BroadcasterID"`
+
+	// For broadcast recipients (many-to-many)
+	Recipients []User `gorm:"many2many:message_recipients;joinForeignKey:MessageID;joinReferences:UserID"`
+
+	// Metadata
+	SentAt      time.Time `gorm:"index;default:CURRENT_TIMESTAMP"`
+	DeliveredAt *time.Time
+	ReadAt      *time.Time
+}
+
+// MessageRecipient join table for broadcasts
+type MessageRecipient struct {
+	MessageID  uint      `gorm:"primaryKey"`
+	UserID     uint      `gorm:"primaryKey"`
+	ReceivedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	ReadAt     *time.Time
+}
+
+//Key Business Rules
+//1 - Content Validation
+//		-Either text or media must be present
+//		-Text length limits (1000 chars)
+//		-Media URL format validation
+//1 - Recipient Rules
+//		-Broadcasts can't have single RecipientID
+//		-Direct messages must have RecipientID
+//		-Broadcasts must have RecipientIDs
+
+func (m *Message) Validate() error {
+	shared.Log.Debug("Validating message",
+		zap.Any("message", m),
+		zap.Bool("isBroadcast", m.IsBroadcast()),
+		zap.Int("numRecipients", len(m.Recipients)),
+		zap.Any("recipients", m.Recipients))
+
+	if m.RequiresRecipientsList() {
+		if len(m.Recipients) == 0 {
+			shared.Log.Error("Validation failed - no recipients for broadcast")
+			return ErrNoRecipients
+		}
+	}
+	// Content Validation
+	if strings.TrimSpace(m.Content) == "" && m.MediaURL == "" {
+		return ErrEmptyMessage
+	}
+	if len(m.Content) > 1000 {
+		return ErrMessageTooLong
+	}
+	if m.MediaURL != "" {
+		if _, err := url.ParseRequestURI(m.MediaURL); err != nil {
+			return ErrInvalidMediaURL
+		}
+	}
+
+	// Recipient Rules
+	if m.RequiresRecipientsList() {
+		if m.RecipientID != nil {
+			return ErrInvalidBroadcast
+		}
+		if len(m.Recipients) == 0 {
+			return ErrNoRecipients
+		}
+	} else {
+		if m.RecipientID == nil {
+			return ErrInvalidRecipient
+		}
+		if len(m.Recipients) > 0 {
+			return ErrDirectMessageNoList
+		}
+	}
+
+	return nil
+}
+
+// Message Reciption val
+func (mr *MessageRecipient) Validate() error {
+	if mr.MessageID == 0 || mr.UserID == 0 {
+		return ErrMissingRecOrSenderID
+	}
+	return nil
+}
+
+// GORM Hooks
+func (m *Message) BeforeCreate(tx *gorm.DB) error {
+	// Auto-set SentAt if not specified
+	if m.SentAt.IsZero() {
+		m.SentAt = time.Now().UTC()
+	}
+
+	// Enforce default status
+	if m.Status == "" {
+		m.Status = StatusSent
+	}
+
+	return nil // REMOVED THE VALIDATION CALL HERE
+}
+
+// Helper methods
+func (m *Message) IsDirect() bool {
+	return m.MessageType == MessageDirect
+}
+
+func (m *Message) IsBroadcast() bool {
+	return m.MessageType == MessageBroadcast
+}
+
+// State management
+func (m *Message) MarkDelivered() {
+	now := time.Now().UTC()
+	m.DeliveredAt = &now
+	m.Status = StatusDelivered
+}
+
+func (m *Message) MarkRead() {
+	if m.DeliveredAt == nil {
+		m.MarkDelivered()
+	}
+	now := time.Now().UTC()
+	m.ReadAt = &now
+	m.Status = StatusRead
+}
+
+func (m *Message) MarkFailed() {
+	m.Status = StatusFailed
+}
+
+func (m *Message) RequiresRecipientsList() bool {
+	return m.IsBroadcast()
+	// Later: return m.IsBroadcast() || m.IsGroup()
+}
+
+
+// ===== END OF ./internal/domain/message.go =====
+
+
+// FILE: ./internal/domain/message_test.go
+
+package domain
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"gorm.io/gorm"
+)
+
+func TestMessage_Validate(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		message Message
+		wantErr error
+	}{
+		// Content Validation Tests
+		{
+			name:    "EmptyMessage",
+			message: Message{Content: "", MediaURL: ""},
+			wantErr: ErrEmptyMessage,
+		},
+		{
+			name: "ValidTextOnly",
+			message: Message{
+				Content:     "Hello",
+				MessageType: MessageDirect,
+				RecipientID: uintPtr(1),
+				SenderID:    1,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "ValidMediaOnly",
+			message: Message{
+				MediaURL:    "https://example.com/image.jpg", //TODO will decide later based on storage implmentation
+				MessageType: MessageDirect,
+				RecipientID: uintPtr(1),
+				SenderID:    1,
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "TextTooLong",
+			message: Message{Content: strings.Repeat("a", 1001), MediaURL: ""},
+			wantErr: ErrMessageTooLong,
+		},
+		{
+			name:    "InvalidMediaURL",
+			message: Message{Content: "", MediaURL: "invalid-url"},
+			wantErr: ErrInvalidMediaURL,
+		},
+
+		// Direct Message Recipient Tests
+		{
+			name: "ValidDirectMessage",
+			message: Message{
+				Content:     "Hi",
+				MessageType: MessageDirect,
+				RecipientID: uintPtr(2),
+				SenderID:    1,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "DirectMessageMissingRecipient",
+			message: Message{
+				Content:     "Hi",
+				MessageType: MessageDirect,
+				SenderID:    1,
+			},
+			wantErr: ErrInvalidRecipient,
+		},
+		{
+			name: "DirectMessageWithRecipientsList",
+			message: Message{
+				Content:     "Hi",
+				MessageType: MessageDirect,
+				RecipientID: uintPtr(2),
+				Recipients:  []User{{Model: gorm.Model{ID: 3}}},
+				SenderID:    1,
+			},
+			wantErr: ErrDirectMessageNoList,
+		},
+
+		// Broadcast Message Tests
+		{
+			name: "ValidBroadcast",
+			message: Message{
+				Content:     "Hello all",
+				MessageType: MessageBroadcast,
+				Recipients:  []User{{Model: gorm.Model{ID: 2}}, {Model: gorm.Model{ID: 3}}},
+				SenderID:    1,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "BroadcastWithRecipientID",
+			message: Message{
+				Content:     "Hello",
+				MessageType: MessageBroadcast,
+				RecipientID: uintPtr(2),
+				SenderID:    1,
+			},
+			wantErr: ErrInvalidBroadcast,
+		},
+		{
+			name: "BroadcastNoRecipients",
+			message: Message{
+				Content:     "Hello",
+				MessageType: MessageBroadcast,
+				SenderID:    1,
+			},
+			wantErr: ErrNoRecipients,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.message.Validate()
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestMessageRecipient_Validate(t *testing.T) {
+	tests := []struct {
+		name string
+		mr   MessageRecipient
+		want error
+	}{
+		{
+			name: "Valid",
+			mr:   MessageRecipient{MessageID: 1, UserID: 1},
+			want: nil,
+		},
+		{
+			name: "MissingMessageID",
+			mr:   MessageRecipient{UserID: 1},
+			want: ErrMissingRecOrSenderID,
+		},
+		{
+			name: "MissingUserID",
+			mr:   MessageRecipient{MessageID: 1},
+			want: ErrMissingRecOrSenderID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.mr.Validate()
+			assert.ErrorIs(t, err, tt.want)
+		})
+	}
+}
+
+func TestMessage_StateTransitions(t *testing.T) {
+	t.Run("MarkDelivered", func(t *testing.T) {
+		msg := Message{Status: StatusSent, SentAt: time.Now()}
+		msg.MarkDelivered()
+		assert.Equal(t, StatusDelivered, msg.Status)
+		assert.NotNil(t, msg.DeliveredAt)
+	})
+
+	t.Run("MarkRead", func(t *testing.T) {
+		msg := Message{Status: StatusSent, SentAt: time.Now()}
+		msg.MarkRead()
+		assert.Equal(t, StatusRead, msg.Status)
+		assert.NotNil(t, msg.DeliveredAt)
+		assert.NotNil(t, msg.ReadAt)
+	})
+}
+
+func TestMessage_HelperMethods(t *testing.T) {
+	t.Run("IsDirect", func(t *testing.T) {
+		msg := Message{MessageType: MessageDirect}
+		assert.True(t, msg.IsDirect())
+		assert.False(t, msg.IsBroadcast())
+	})
+
+	t.Run("IsBroadcast", func(t *testing.T) {
+		msg := Message{MessageType: MessageBroadcast}
+		assert.True(t, msg.IsBroadcast())
+		assert.False(t, msg.IsDirect())
+	})
+
+	t.Run("RequiresRecipientsList", func(t *testing.T) {
+		t.Run("Direct", func(t *testing.T) {
+			msg := Message{MessageType: MessageDirect}
+			assert.False(t, msg.RequiresRecipientsList())
+		})
+		t.Run("Broadcast", func(t *testing.T) {
+			msg := Message{MessageType: MessageBroadcast}
+			assert.True(t, msg.RequiresRecipientsList())
+		})
+	})
+}
+
+func TestMessage_BeforeCreate(t *testing.T) {
+	baseMsg := Message{
+		Content:     "test",
+		MessageType: MessageDirect,
+		RecipientID: uintPtr(1),
+	}
+
+	t.Run("SetsDefaultSentAt", func(t *testing.T) {
+		msg := baseMsg
+		msg.SentAt = time.Time{} // Zero value
+		err := msg.BeforeCreate(nil)
+		assert.NoError(t, err)
+		assert.False(t, msg.SentAt.IsZero())
+	})
+
+	t.Run("SetsDefaultStatus", func(t *testing.T) {
+		msg := baseMsg
+		msg.Status = ""
+		err := msg.BeforeCreate(nil)
+		assert.NoError(t, err)
+		assert.Equal(t, StatusSent, msg.Status)
+	})
+}
+
+// Helper function to create uint pointers
+func uintPtr(i uint) *uint {
+	return &i
+}
+
+
+// ===== END OF ./internal/domain/message_test.go =====
+
+
+// FILE: ./internal/domain/repositories.go
+
+package domain
+
+import (
+	"context"
+	"io"
+	"time"
+)
+
+// MessageQuery is used for pagination and filtering
+type MessageQuery struct {
+	Limit       int       // Number of messages to return
+	Offset      int       // Pagination offset
+	Before      time.Time // Return messages before this time
+	After       time.Time // Return messages after this time
+	SortBy      string    // "asc" or "desc"
+	MessageType string    // Filter by message type
+	HasMedia    *bool     // Filter by media presence
+	Status      string    // Filter by status
+}
+
+type UserRepository interface {
+	Create(ctx context.Context, userName, email, passwordHash string) (*User, error)
+	FindByID(ctx context.Context, userID uint) (*User, error)
+	FindByUsername(ctx context.Context, username string) (*User, error)
+	FindProfileByID(ctx context.Context, userID uint) (*User, error)
+	Update(ctx context.Context, userID uint, username, email string) error
+	UpdatePassword(ctx context.Context, userID uint, passwordHash string) error
+	UpdateLastActiveAt(ctx context.Context, userID uint) error
+	Exists(ctx context.Context, userID uint) (bool, error)
+	ExistsByUsername(ctx context.Context, username string) (bool, error)
+}
+
+type MessageRepository interface {
+	Create(ctx context.Context, senderID uint, content, mediaURL string, messageType MessageType) (*Message, error)
+	CreateWithRecipients(ctx context.Context, msg *Message, recipientIDs []uint) (*Message, error)
+	FindByID(ctx context.Context, messageID uint) (*Message, error)
+	FindConversation(ctx context.Context, user1ID, user2ID uint, query MessageQuery) ([]Message, error)
+	FindUserMessages(ctx context.Context, userID uint, query MessageQuery) ([]Message, error)
+	FindBroadcasts(ctx context.Context, broadcasterID uint, query MessageQuery) ([]Message, error)
+	MarkAsDelivered(ctx context.Context, messageID uint) error
+	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
+	Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error
+	Delete(ctx context.Context, messageID uint) error
+}
+
+type MessageRecipientRepository interface {
+	Create(ctx context.Context, messageID uint, recipientID uint) error
+	CreateBulk(ctx context.Context, messageID uint, recipientIDs []uint) error
+}
+
+type MessageService interface {
+	SendText(ctx context.Context, senderID, recipientID uint, content string) (*Message, error)
+	SendMedia(ctx context.Context, senderID, recipientID uint, content string, mediaURL string) (*Message, error)
+	Broadcast(ctx context.Context, senderID uint, content string, recipientIDs []uint) (*Message, error)
+	GetConversation(ctx context.Context, user1ID, user2ID uint, query MessageQuery) ([]Message, error)
+	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
+}
+
+//Auth Interfaces
+
+type TokenProvider interface {
+	GenerateToken(ctx context.Context, user *User) (string, error)
+	GenerateRefreshToken(ctx context.Context, user *User) (string, error)
+	ValidateToken(ctx context.Context, tokenString string) (*TokenClaims, error)
+	ValidateRefreshToken(ctx context.Context, tokenString string) (*TokenClaims, error)
+	GetAccessExpiry() time.Duration
+	GetRefreshExpiry() time.Duration
+}
+
+type AuthService interface {
+	Login(ctx context.Context, username, password string) (interface{}, error)
+	Refresh(ctx context.Context, refreshToken string) (interface{}, error)
+	Logout(ctx context.Context, token string) error
+}
+
+//Media Interfaces
+
+type MediaStorage interface {
+	Upload(ctx context.Context, file io.Reader, filename string, size int64) (string, error)
+	Delete(ctx context.Context, url string) error
+	GetSignedURL(ctx context.Context, url string) (string, error)
+}
+
+type MediaService interface {
+	Upload(ctx context.Context, userID uint, file io.Reader, filename string, size int64) (*MediaResponse, error)
+	GetByUser(ctx context.Context, userID uint) ([]MediaResponse, error)
+	Delete(ctx context.Context, userID uint, mediaID uint) error
+}
+
+//Real Time Interfaces
+
+type MessageNotifier interface {
+	Subscribe(ctx context.Context, userID uint) (<-chan *Message, error)
+	Unsubscribe(ctx context.Context, userID uint) error
+	Notify(ctx context.Context, message *Message) error
+	Broadcast(ctx context.Context, message *Message, recipientIDs []uint) error
+}
+
+type PresenceTracker interface {
+	Track(ctx context.Context, userID uint) error
+	Untrack(ctx context.Context, userID uint) error
+	GetOnline(ctx context.Context) ([]uint, error)
+}
+
+// Transaction Manager for repositories
+
+type Repositories struct {
+	Users             UserRepository
+	Messages          MessageRepository
+	MessageRecipients MessageRecipientRepository
+}
+
+type TransactionManager interface {
+	WithTransaction(ctx context.Context, fn func(ctx context.Context, repos *Repositories) error) error
+}
+
+
+// ===== END OF ./internal/domain/repositories.go =====
+
+
+// FILE: ./internal/domain/user.go
+
+package domain
+
+import (
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"gorm.io/gorm"
+)
+
+type User struct {
+	gorm.Model
+	Username     string     `gorm:"uniqueIndex;size:50;not null"`
+	Email        string     `gorm:"uniqueIndex;size:100;not null"`
+	PasswordHash string     `gorm:"type:text;not null"`
+	LastActiveAt time.Time  `gorm:"index"`
+	Status       UserStatus `gorm:"type:user_status;default:'offline'"`
+
+	// Relationships
+	SentMessages     []Message `gorm:"foreignKey:SenderID"`
+	ReceivedMessages []Message `gorm:"foreignKey:RecipientID"`
+	Broadcasts       []Message `gorm:"foreignKey:BroadcasterID"`
+}
+
+//Value Objects and Bussiness rules for user "behaviour of user object"
+
+// BeforeCreate sets the LastActiveAt field to the current time
+// before a new User record is created in the database.
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+	// Only validate new users
+	if u.ID == 0 { // New user
+		return u.Validate()
+	}
+	return nil
+}
+
+func (u *User) AfterFind(tx *gorm.DB) error {
+	return nil // Skip all validation on find
+}
+
+// check user rules for user critical fields validty
+func (u *User) Validate() error {
+	switch {
+	case len(u.Username) < 3:
+		return ErrUsernameTooShort
+	case !strings.Contains(u.Email, "@") || !strings.Contains(u.Email, "."):
+		return ErrInvalidEmail
+	}
+	return nil
+}
+
+func (u *User) ValidateRegistration() error {
+	if err := u.Validate(); err != nil {
+		return err
+	}
+	if u.PasswordHash == "" || len(u.PasswordHash) < 8 {
+		return ErrWeakPassword
+	}
+	return nil
+}
+
+// SetPassword securely hashes and stores password
+func (u *User) SetPassword(plainText string) error {
+	if len(plainText) < 8 {
+		return ErrWeakPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainText), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = string(hash)
+	return nil
+}
+
+// CheckPassword verifies against stored hash
+func (u *User) CheckPassword(plainText string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(plainText))
+	return err == nil
+}
+func (u *User) UpdateLastActive() {
+	u.LastActiveAt = time.Now().UTC()
+}
+
+
+// ===== END OF ./internal/domain/user.go =====
+
+
+// FILE: ./internal/domain/user_test.go
+
+package domain
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestUserModel(t *testing.T) {
+	baseUser := User{
+		Username:     "validuser",
+		Email:        "valid@example.com",
+		PasswordHash: "$2a$10$fakehashedpassword",
+	}
+
+	t.Run("Validation", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			modifyFn    func(*User)
+			expectedErr error
+		}{
+			{
+				name:        "ValidUser",
+				modifyFn:    func(u *User) {},
+				expectedErr: nil,
+			},
+			{
+				name: "UsernameTooShort",
+				modifyFn: func(u *User) {
+					u.Username = "ab"
+				},
+				expectedErr: ErrUsernameTooShort,
+			},
+			{
+				name: "InvalidEmail",
+				modifyFn: func(u *User) {
+					u.Email = "invalid-email"
+				},
+				expectedErr: ErrInvalidEmail,
+			},
+			{
+				name: "EmptyPasswordHash",
+				modifyFn: func(u *User) {
+					u.PasswordHash = ""
+				},
+				expectedErr: ErrWeakPassword,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				user := baseUser
+				tt.modifyFn(&user)
+				err := user.Validate()
+				assert.ErrorIs(t, err, tt.expectedErr)
+			})
+		}
+	})
+
+	t.Run("PasswordHashing", func(t *testing.T) {
+		t.Run("SetValidPassword", func(t *testing.T) {
+			u := baseUser
+			err := u.SetPassword("validpass123")
+			assert.NoError(t, err)
+			assert.NotEqual(t, "validpass123", u.PasswordHash)
+			assert.True(t, len(u.PasswordHash) > 0)
+		})
+
+		t.Run("RejectWeakPassword", func(t *testing.T) {
+			u := baseUser
+			err := u.SetPassword("short")
+			assert.ErrorIs(t, err, ErrWeakPassword)
+			assert.Equal(t, baseUser.PasswordHash, u.PasswordHash)
+		})
+
+		t.Run("PasswordVerification", func(t *testing.T) {
+			u := baseUser
+			plainPass := "testpassword"
+			assert.NoError(t, u.SetPassword(plainPass))
+
+			assert.True(t, u.CheckPassword(plainPass))
+			assert.False(t, u.CheckPassword("wrongpassword"))
+			assert.False(t, u.CheckPassword(""))
+		})
+	})
+
+	t.Run("ActivityTracking", func(t *testing.T) {
+		u := baseUser
+		initialTime := u.LastActiveAt
+
+		time.Sleep(10 * time.Millisecond)
+		u.UpdateLastActive()
+
+		assert.True(t, u.LastActiveAt.After(initialTime))
+		assert.False(t, u.LastActiveAt.IsZero())
+	})
+
+	t.Run("GORMHooks", func(t *testing.T) {
+		t.Run("BeforeCreateSetsActivity", func(t *testing.T) {
+			u := User{
+				Username:     "newuser",
+				Email:        "new@example.com",
+				PasswordHash: "$2a$10$fakehash",
+			}
+			err := u.BeforeCreate(nil)
+			assert.NoError(t, err)
+			assert.False(t, u.LastActiveAt.IsZero())
+		})
+
+		t.Run("BeforeCreateValidates", func(t *testing.T) {
+			u := User{
+				Username: "ab", // Too short
+				Email:    "new@example.com",
+			}
+			err := u.BeforeCreate(nil)
+			assert.ErrorIs(t, err, ErrUsernameTooShort)
+		})
+
+		// t.Run("BeforeUpdateValidates", func(t *testing.T) {
+		// 	u := baseUser
+		// 	u.Email = "invalid-email"
+		// 	err := u.BeforeUpdate(nil)
+		// 	assert.ErrorIs(t, err, shared.ErrInvalidEmail)
+		// })
+	})
+}
+
+
+// ===== END OF ./internal/domain/user_test.go =====
+
+
+// FILE: ./internal/dto/auth/request.go
+
+package auth
+
+type LoginRequest struct {
+	Username string `json:"username" validate:"required,min=3"`
+	Password string `json:"password" validate:"required,min=8"`
+}
+
+type RegisterRequest struct {
+	Username string `json:"username" validate:"required,min=3"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+}
+
+type RefreshRequest struct {
+	Token string `json:"refresh_token" validate:"required"`
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required,min=8"`
+	NewPassword     string `json:"new_password" validate:"required,min=8"`
+}
+
+
+// ===== END OF ./internal/dto/auth/request.go =====
+
+
+// FILE: ./internal/dto/auth/response.go
+
+package auth
+
+type AuthResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"` // seconds until expiration
+	TokenType    string `json:"token_type"` // "Bearer"
+	UserID       uint   `json:"user_id"`
+	Username     string `json:"username"`
+	Email        string `json:"email"`
+}
+
+
+// ===== END OF ./internal/dto/auth/response.go =====
+
+
+// FILE: ./internal/dto/message/request.go
+
+package message
+
+import "time"
+
+type SendRequest struct {
+	Content     string `json:"content" validate:"required_without=MediaURL"`
+	MediaURL    string `json:"media_url" validate:"omitempty,url"`
+	RecipientID uint   `json:"recipient_id" validate:"required_if=Type direct"`
+	Type        string `json:"type" validate:"required,oneof=direct broadcast"`
+}
+
+type BroadcastRequest struct {
+	Content      string `json:"content" validate:"required_without=MediaURL"`
+	MediaURL     string `json:"media_url" validate:"omitempty,url"`
+	RecipientIDs []uint `json:"recipient_ids" validate:"required,min=1"`
+}
+
+type QueryRequest struct {
+	Limit       int       `json:"limit" validate:"omitempty,min=1,max=100"`
+	Offset      int       `json:"offset" validate:"omitempty,min=0"`
+	Before      time.Time `json:"before"`
+	After       time.Time `json:"after"`
+	MessageType string    `json:"message_type" validate:"omitempty,oneof=direct broadcast"`
+	HasMedia    *bool     `json:"has_media"`
+	Status      string    `json:"status" validate:"omitempty,oneof=sent delivered read"`
+}
+
+
+// ===== END OF ./internal/dto/message/request.go =====
+
+
+// FILE: ./internal/dto/message/response.go
+
+package message
+
+import "time"
+
+type MessageResponse struct {
+	ID          uint      `json:"id"`
+	Content     string    `json:"content"`
+	MediaURL    string    `json:"media_url,omitempty"`
+	Type        string    `json:"type"`
+	Status      string    `json:"status"`
+	SenderID    uint      `json:"sender_id"`
+	RecipientID uint      `json:"recipient_id,omitempty"`
+	SentAt      time.Time `json:"sent_at"`
+	DeliveredAt time.Time `json:"delivered_at,omitempty"`
+	ReadAt      time.Time `json:"read_at,omitempty"`
+}
+
+type ConversationResponse struct {
+	Messages []MessageResponse `json:"messages"`
+	Total    int64             `json:"total"`
+}
+
+
+// ===== END OF ./internal/dto/message/response.go =====
+
+
+// FILE: ./internal/dto/user/request.go
+
+package user
+
+type UpdateProfileRequest struct {
+	Username string `json:"username" validate:"omitempty,min=3"`
+	Email    string `json:"email" validate:"omitempty,email"`
+}
+
+type MessageHistoryRequest struct {
+	Limit  int `json:"limit" validate:"omitempty,min=1,max=100"`
+	Offset int `json:"offset" validate:"omitempty,min=0"`
+}
+
+
+// ===== END OF ./internal/dto/user/request.go =====
+
+
+// FILE: ./internal/dto/user/response.go
+
+package user
+
+import "time"
+
+type ProfileResponse struct {
+	ID         uint      `json:"id"`
+	Username   string    `json:"username"`
+	Email      string    `json:"email"`
+	LastActive time.Time `json:"last_active"`
+	Status     string    `json:"status"`
+}
+
+type MessageHistoryResponse struct {
+	Messages []MessageResponse `json:"messages"`
+	Total    int64             `json:"total"`
+}
+
+type MessageResponse struct {
+	ID        uint      `json:"id"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	Status    string    `json:"status"`
+	Type      string    `json:"type"`
+}
+
+
+// ===== END OF ./internal/dto/user/response.go =====
+
+
+// FILE: ./internal/infrastructure/auth/jwt_provider.go
+
+package auth
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+type JWTProvider struct {
+	cfg config.AuthConfig
+}
+
+func NewJWTProvider(cfg config.AuthConfig) *JWTProvider {
+	return &JWTProvider{cfg: cfg}
+}
+
+func (p *JWTProvider) GenerateToken(ctx context.Context, user *domain.User) (string, error) {
+	return p.generateToken(user, false)
+}
+
+func (p *JWTProvider) GenerateRefreshToken(ctx context.Context, user *domain.User) (string, error) {
+	return p.generateToken(user, true)
+}
+
+func (p *JWTProvider) generateToken(user *domain.User, isRefresh bool) (string, error) {
+	// Generate random session ID for invalidation purposes
+	sessionID, err := generateSessionID()
+	if err != nil {
+		return "", err
+	}
+
+	expiry := p.cfg.AccessTokenExpiry
+	if isRefresh {
+		expiry = p.cfg.RefreshTokenExpiry
+	}
+
+	claims := domain.TokenClaims{
+		UserID:    user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		SessionID: sessionID,
+		IsRefresh: isRefresh,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "chatting-service",
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(p.cfg.JWTSecret))
+}
+
+func (p *JWTProvider) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	claims, err := p.parseToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	if claims.IsRefresh {
+		return nil, domain.ErrInvalidToken
+	}
+
+	return claims, nil
+}
+
+func (p *JWTProvider) ValidateRefreshToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	claims, err := p.parseToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	if !claims.IsRefresh {
+		return nil, domain.ErrInvalidToken
+	}
+
+	return claims, nil
+}
+
+func (p *JWTProvider) parseToken(tokenString string) (*domain.TokenClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &domain.TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(p.cfg.JWTSecret), nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if claims, ok := token.Claims.(*domain.TokenClaims); ok && token.Valid {
+		return claims, nil
+	}
+
+	return nil, domain.ErrInvalidToken
+}
+
+func (p *JWTProvider) GetAccessExpiry() time.Duration {
+	return p.cfg.AccessTokenExpiry
+}
+
+func (p *JWTProvider) GetRefreshExpiry() time.Duration {
+	return p.cfg.RefreshTokenExpiry
+}
+
+// generateSessionID creates a cryptographically secure random string
+func generateSessionID() (string, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+
+// ===== END OF ./internal/infrastructure/auth/jwt_provider.go =====
+
+
+// FILE: ./internal/infrastructure/database/message_recipient_repository.go
+
+package database
+
+import (
+	"context"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+type messageRecipientRepository struct {
+	db *gorm.DB
+}
+
+func NewMessageRecipientRepository(db *gorm.DB) domain.MessageRecipientRepository {
+	return &messageRecipientRepository{db: db}
+}
+
+func (r *messageRecipientRepository) Create(ctx context.Context, messageID uint, recipientID uint) error {
+	err := r.db.WithContext(ctx).Create(&domain.MessageRecipient{
+		MessageID:  messageID,
+		UserID:     recipientID,
+		ReceivedAt: time.Now().UTC(),
+	}).Error
+
+	if err != nil {
+		shared.Log.Error("create message recipient failed",
+			zap.String("operation", "Create"),
+			zap.Uint("messageID", messageID),
+			zap.Uint("recipientID", recipientID),
+			zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("create message recipient failed").WithDetails(err.Error())
+	}
+
+	shared.Log.Debug("message recipient created",
+		zap.Uint("messageID", messageID),
+		zap.Uint("recipientID", recipientID))
+	return nil
+}
+
+func (r *messageRecipientRepository) CreateBulk(ctx context.Context, messageID uint, recipientIDs []uint) error {
+	recipients := make([]domain.MessageRecipient, len(recipientIDs))
+	for i, id := range recipientIDs {
+		recipients[i] = domain.MessageRecipient{
+			MessageID:  messageID,
+			UserID:     id,
+			ReceivedAt: time.Now().UTC(),
+		}
+	}
+
+	err := r.db.WithContext(ctx).Create(&recipients).Error
+	if err != nil {
+		shared.Log.Error("create bulk message recipients failed",
+			zap.String("operation", "CreateBulk"),
+			zap.Uint("messageID", messageID),
+			zap.Int("recipientCount", len(recipientIDs)),
+			zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("create bulk message recipients failed").WithDetails(err.Error())
+	}
+
+	shared.Log.Debug("bulk message recipients created",
+		zap.Uint("messageID", messageID),
+		zap.Int("recipientCount", len(recipientIDs)))
+	return nil
+}
+
+
+// ===== END OF ./internal/infrastructure/database/message_recipient_repository.go =====
+
+
+// FILE: ./internal/infrastructure/database/message_repository.go
+
+package database
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+type messageRepository struct {
+	db *gorm.DB
+}
+
+func NewMessageRepository(db *gorm.DB) domain.MessageRepository {
+	return &messageRepository{db: db}
+}
+
+func (r *messageRepository) Create(ctx context.Context, senderID uint, content, mediaURL string, messageType domain.MessageType) (*domain.Message, error) {
+	msg := &domain.Message{
+		SenderID:    senderID,
+		Content:     content,
+		MediaURL:    mediaURL,
+		MessageType: messageType,
+		Status:      domain.StatusSent,
+	}
+
+	err := r.db.WithContext(ctx).Create(msg).Error
+	if err != nil {
+		shared.Log.Error("create message failed",
+			zap.String("operation", "Create"),
+			zap.Uint("senderID", senderID),
+			zap.String("content", content),
+			zap.String("mediaURL", mediaURL),
+			zap.String("messageType", string(messageType)),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("create message failed").WithDetails(err.Error())
+	}
+	return msg, nil
+}
+
+func (r *messageRepository) CreateWithRecipients(ctx context.Context, msg *domain.Message, recipientIDs []uint) (*domain.Message, error) {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(msg).Error; err != nil {
+			shared.Log.Error("create message with recipients failed",
+				zap.String("operation", "CreateWithRecipients"),
+				zap.Uint("senderID", msg.SenderID),
+				zap.String("content", msg.Content),
+				zap.String("mediaURL", msg.MediaURL),
+				zap.String("messageType", string(msg.MessageType)),
+				zap.Error(err))
+			return shared.ErrDatabaseOperation.WithDetails("create message with recipients failed").WithDetails(err.Error())
+		}
+
+		if len(recipientIDs) > 0 {
+			recipients := make([]domain.MessageRecipient, len(recipientIDs))
+			for i, id := range recipientIDs {
+				recipients[i] = domain.MessageRecipient{
+					MessageID:  msg.ID,
+					UserID:     id,
+					ReceivedAt: time.Now().UTC(),
+				}
+			}
+			if err := tx.Create(&recipients).Error; err != nil {
+				shared.Log.Error("create message recipients failed",
+					zap.String("operation", "CreateWithRecipients"),
+					zap.Uint("senderID", msg.SenderID),
+					zap.String("content", msg.Content),
+					zap.String("mediaURL", msg.MediaURL),
+					zap.String("messageType", string(msg.MessageType)),
+					zap.Error(err))
+				return shared.ErrDatabaseOperation.WithDetails("create message recipients failed").WithDetails(err.Error())
+			}
+		}
+		return nil
+	})
+	return msg, err
+}
+
+func (r *messageRepository) CreateWithTransaction(ctx context.Context, fn func(ctx context.Context, txRepo domain.MessageRepository) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Create a new repository instance with the transaction DB
+		txRepo := NewMessageRepository(tx)
+		return fn(ctx, txRepo)
+	})
+}
+
+func (r *messageRepository) FindByID(ctx context.Context, messageID uint) (*domain.Message, error) {
+	var message domain.Message
+	err := r.db.WithContext(ctx).
+		Preload("Sender").
+		Preload("Recipients").
+		First(&message, messageID).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		shared.Log.Debug("message not found",
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return nil, shared.ErrRecordNotFound.WithDetails("message not found").WithDetails(err.Error())
+	}
+	if err != nil {
+		shared.Log.Error("find message by ID failed",
+			zap.String("operation", "FindByID"),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find message by ID failed").WithDetails(err.Error())
+	}
+	return &message, nil
+}
+
+func (r *messageRepository) FindConversation(ctx context.Context, user1ID, user2ID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	var messages []domain.Message
+
+	q := r.db.WithContext(ctx).
+		Preload("Sender").
+		Where("((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))",
+			user1ID, user2ID, user2ID, user1ID).
+		Where("deleted_at IS NULL")
+
+	q = applyMessageQuery(q, query)
+
+	err := q.Find(&messages).Error
+	if err != nil {
+		shared.Log.Error("find conversation failed",
+			zap.String("operation", "FindConversation"),
+			zap.Uint("user1ID", user1ID),
+			zap.Uint("user2ID", user2ID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find conversation failed").WithDetails(err.Error())
+	}
+	return messages, nil
+}
+
+func (r *messageRepository) FindUserMessages(ctx context.Context, userID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	var messages []domain.Message
+
+	q := r.db.WithContext(ctx).
+		Preload("Sender").
+		Preload("Recipient").
+		Where("sender_id = ? OR recipient_id = ?", userID, userID).
+		Where("deleted_at IS NULL")
+
+	q = applyMessageQuery(q, query)
+
+	err := q.Find(&messages).Error
+	if err != nil {
+		shared.Log.Error("find user messages failed",
+			zap.String("operation", "FindUserMessages"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user messages failed").WithDetails(err.Error())
+	}
+	return messages, nil
+}
+
+func (r *messageRepository) FindBroadcasts(ctx context.Context, broadcasterID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	var messages []domain.Message
+
+	q := r.db.WithContext(ctx).
+		Preload("Broadcaster").
+		Where("broadcaster_id = ?", broadcasterID).
+		Where("deleted_at IS NULL")
+
+	q = applyMessageQuery(q, query)
+
+	err := q.Find(&messages).Error
+	if err != nil {
+		shared.Log.Error("find broadcasts failed",
+			zap.String("operation", "FindBroadcasts"),
+			zap.Uint("broadcasterID", broadcasterID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find broadcasts failed").WithDetails(err.Error())
+	}
+	return messages, nil
+}
+
+func (r *messageRepository) MarkAsDelivered(ctx context.Context, messageID uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var message domain.Message
+		if err := tx.First(&message, messageID).Error; err != nil {
+			shared.Log.Error("mark message as delivered failed",
+				zap.String("operation", "MarkAsDelivered"),
+				zap.Uint("messageID", messageID),
+				zap.Error(err))
+			return shared.ErrDatabaseOperation.WithDetails("mark message as delivered failed").WithDetails(err.Error())
+		}
+
+		now := time.Now().UTC()
+		return tx.Model(&message).
+			Updates(map[string]interface{}{
+				"status":       domain.StatusDelivered,
+				"delivered_at": now,
+			}).Error
+	})
+}
+
+func (r *messageRepository) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Update message status if sender is viewing
+		if err := tx.Model(&domain.Message{}).
+			Where("id = ?", messageID).
+			Updates(map[string]interface{}{
+				"status":  domain.StatusRead,
+				"read_at": time.Now().UTC(),
+			}).Error; err != nil {
+			shared.Log.Error("mark message as read failed",
+				zap.String("operation", "MarkAsRead"),
+				zap.Uint("messageID", messageID),
+				zap.Error(err))
+			return shared.ErrDatabaseOperation.WithDetails("mark message as read failed").WithDetails(err.Error())
+		}
+
+		// Update recipient status for broadcasts
+		return tx.Model(&domain.MessageRecipient{}).
+			Where("message_id = ? AND user_id = ?", messageID, recipientID).
+			Update("read_at", time.Now().UTC()).Error
+	})
+}
+
+func (r *messageRepository) Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updates := make(map[string]interface{})
+
+		if recipientID != nil {
+			updates["recipient_id"] = recipientID
+			// Clear broadcaster if setting recipient (direct message)
+			updates["broadcaster_id"] = nil
+		}
+
+		if broadcasterID != nil {
+			updates["broadcaster_id"] = broadcasterID
+			// Clear recipient if setting broadcaster (broadcast)
+			updates["recipient_id"] = nil
+		}
+
+		if len(updates) == 0 {
+			shared.Log.Debug("no updates needed",
+				zap.String("operation", "Update"),
+				zap.Uint("messageID", messageID))
+			return nil // No updates needed
+		}
+
+		err := tx.Model(&domain.Message{}).
+			Where("id = ?", messageID).
+			Updates(updates).Error
+		if err != nil {
+			shared.Log.Error("update message failed",
+				zap.String("operation", "Update"),
+				zap.Uint("messageID", messageID),
+				zap.Error(err))
+			return shared.ErrDatabaseOperation.WithDetails("update message failed").WithDetails(err.Error())
+		}
+		return nil
+	})
+}
+
+func (r *messageRepository) Delete(ctx context.Context, messageID uint) error {
+	err := r.db.WithContext(ctx).Delete(&domain.Message{}, messageID).Error
+	if err != nil {
+		shared.Log.Error("delete message failed",
+			zap.String("operation", "Delete"),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("delete message failed").WithDetails(err.Error())
+	}
+	return nil
+}
+
+// Helper function to apply query filters
+func applyMessageQuery(q *gorm.DB, query domain.MessageQuery) *gorm.DB {
+	if query.Limit > 0 {
+		q = q.Limit(query.Limit)
+	}
+	if query.Offset > 0 {
+		q = q.Offset(query.Offset)
+	}
+	if !query.Before.IsZero() {
+		q = q.Where("sent_at < ?", query.Before)
+	}
+	if !query.After.IsZero() {
+		q = q.Where("sent_at > ?", query.After)
+	}
+	if query.MessageType != "" {
+		q = q.Where("message_type = ?", query.MessageType)
+	}
+	if query.HasMedia != nil {
+		if *query.HasMedia {
+			q = q.Where("media_url IS NOT NULL AND media_url != ''")
+		} else {
+			q = q.Where("media_url IS NULL OR media_url = ''")
+		}
+	}
+	if query.Status != "" {
+		q = q.Where("status = ?", query.Status)
+	}
+
+	// Default sorting - newest first
+	sortOrder := "DESC"
+	if query.SortBy == "asc" {
+		sortOrder = "ASC"
+	}
+	q = q.Order("sent_at " + sortOrder)
+
+	return q
+}
+
+
+// ===== END OF ./internal/infrastructure/database/message_repository.go =====
+
+
+// FILE: ./internal/infrastructure/database/transaction.go
+
+package database
+
+import (
+	"context"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"gorm.io/gorm"
+)
+
+type GormTransactionManager struct {
+	db *gorm.DB
+}
+
+// NewTransactionManager creates a new TransactionManager that wraps a Gorm DB
+// instance. The TransactionManager can be used to execute database operations
+// within a transaction. If the operations are successful, the transaction is
+// committed. If an error is encountered, the transaction is rolled back.
+// should only be used for transaction where multiple operations are executed
+func NewTransactionManager(db *gorm.DB) domain.TransactionManager {
+	return &GormTransactionManager{db: db}
+}
+
+func (m *GormTransactionManager) WithTransaction(
+	ctx context.Context,
+	fn func(context.Context, *domain.Repositories) error,
+) error {
+	// Start transaction with context
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		repos := &domain.Repositories{
+			//TODO
+			// Users:             NewGormUserRepository(tx),
+			// Messages:          NewGormMessageRepository(tx),
+			// MessageRecipients: NewGormMessageRecipientRepository(tx),
+		}
+		return fn(ctx, repos) // Propagate context to the callback
+	})
+}
+
+
+// ===== END OF ./internal/infrastructure/database/transaction.go =====
+
+
+// FILE: ./internal/infrastructure/database/user_repository.go
+
+package database
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+type userRepository struct {
+	db *gorm.DB
+}
+
+func NewUserRepository(db *gorm.DB) domain.UserRepository {
+	return &userRepository{db: db}
+}
+
+// COMMAND OPERATIONS (Write)
+
+func (r *userRepository) Create(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
+	user := &domain.User{
+		Username:     username,
+		Email:        email,
+		PasswordHash: passwordHash,
+	}
+
+	if validationErr := user.ValidateRegistration(); validationErr != nil {
+		return nil, validationErr
+	}
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(user).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				if strings.Contains(err.Error(), "users_username_key") {
+					shared.Log.Debug("username already exists", zap.String("username", username))
+					return shared.ErrValidation.WithDetails("username already exists")
+				}
+				if strings.Contains(err.Error(), "users_email_key") {
+					shared.Log.Debug("email already exists", zap.String("email", email))
+					return shared.ErrValidation.WithDetails("email already exists")
+				}
+			}
+			shared.Log.Error("create user failed",
+				zap.String("operation", "Create"),
+				zap.String("username", username),
+				zap.String("email", email),
+				zap.String("password_hash", passwordHash),
+				zap.Error(err))
+			return shared.ErrDatabaseOperation.WithDetails("create user failed").WithDetails(err.Error())
+		}
+		return nil
+	})
+
+	return user, err
+}
+
+func (r *userRepository) Update(ctx context.Context, userID uint, username, email string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if username != "" {
+			exists, err := r.usernameExists(tx, username, userID)
+			if err != nil {
+				shared.Log.Error("username check failed",
+					zap.String("operation", "Update"),
+					zap.Uint("userID", userID),
+					zap.String("username", username),
+					zap.Error(err))
+				return shared.ErrDatabaseOperation.WithDetails("username check failed").WithDetails(err.Error())
+			}
+			if exists {
+				return shared.ErrDuplicateEntry.WithDetails("username already exists")
+			}
+		}
+
+		if email != "" {
+			exists, err := r.emailExists(tx, email, userID)
+			if err != nil {
+				shared.Log.Error("email check failed",
+					zap.String("operation", "Update"),
+					zap.Uint("userID", userID),
+					zap.String("email", email),
+					zap.Error(err))
+				return shared.ErrDatabaseOperation.WithDetails("email check failed").WithDetails(err.Error())
+			}
+			if exists {
+				return shared.ErrDuplicateEntry.WithDetails("email already exists")
+			}
+		}
+
+		updates := map[string]interface{}{}
+		if username != "" {
+			updates["username"] = username
+		}
+		if email != "" {
+			updates["email"] = email
+		}
+
+		if len(updates) > 0 {
+			if err := tx.Model(&domain.User{}).
+				Where("id = ?", userID).
+				Updates(updates).Error; err != nil {
+				shared.Log.Error("update user failed",
+					zap.String("operation", "Update"),
+					zap.Uint("userID", userID),
+					zap.Any("updates", updates),
+					zap.Error(err))
+				return shared.ErrDatabaseOperation.WithDetails("update user failed").WithDetails(err.Error())
+			}
+		}
+
+		return nil
+	})
+}
+
+func (r *userRepository) UpdateLastActiveAt(ctx context.Context, userID uint) error {
+	err := r.db.WithContext(ctx).Exec(
+		"UPDATE users SET last_active_at = ? WHERE id = ?",
+		time.Now().UTC(),
+		userID,
+	).Error
+	if err != nil {
+		shared.Log.Error("update last active at failed",
+			zap.String("operation", "UpdateLastActiveAt"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("update last active at failed").WithDetails(err.Error())
+	}
+	return nil
+}
+
+// QUERY OPERATIONS (Read)
+
+func (r *userRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
+	var user domain.User
+	err := r.db.WithContext(ctx).First(&user, userID).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		shared.Log.Debug("user not found",
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+	}
+	if err != nil {
+		shared.Log.Error("find user by ID failed",
+			zap.String("operation", "FindByID"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindProfileByID(ctx context.Context, userID uint) (*domain.User, error) {
+	var user domain.User
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "last_active_at", "status").
+		First(&user, userID).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		shared.Log.Debug("user profile not found",
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, shared.ErrRecordNotFound.WithDetails("user profile not found").WithDetails(err.Error())
+	}
+	if err != nil {
+		shared.Log.Error("find user profile by ID failed",
+			zap.String("operation", "FindProfileByID"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user profile by ID failed").WithDetails(err.Error())
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByUsername(ctx context.Context, username string) (*domain.User, error) {
+	var user domain.User
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "password_hash", "last_active_at").
+		Where("username = ?", username).
+		First(&user).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		shared.Log.Debug("user not found", zap.String("username", username))
+		return nil, shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+	}
+	if err != nil {
+		shared.Log.Error("find user by username failed",
+			zap.String("operation", "FindByUsername"),
+			zap.String("username", username),
+			zap.Error(err))
+		return nil, shared.ErrRecordNotFound.WithDetails("find user by username failed").WithDetails(err.Error())
+	}
+	return &user, nil
+}
+
+func (r *userRepository) Exists(ctx context.Context, userID uint) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("id = ?", userID).
+		Count(&count).Error
+
+	if err != nil {
+		shared.Log.Error("user exists check failed",
+			zap.String("operation", "Exists"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return false, shared.ErrDatabaseOperation.WithDetails("user exists check failed").WithDetails(err.Error())
+	}
+	return count > 0, nil
+}
+
+func (r *userRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("username = ?", username).
+		Count(&count).Error
+
+	if err != nil {
+		shared.Log.Error("user exists check failed",
+			zap.String("operation", "ExistsByUsername"),
+			zap.String("username", username),
+			zap.Error(err))
+		return false, shared.ErrDatabaseOperation.WithDetails("user exists check failed").WithDetails(err.Error())
+	}
+	return count > 0, nil
+}
+
+// Helper methods (private to repository)
+func (r *userRepository) usernameExists(tx *gorm.DB, username string, excludeID uint) (bool, error) {
+	var count int64
+	if err := tx.Model(&domain.User{}).
+		Where("username = ? AND id <> ?", username, excludeID).
+		Count(&count).Error; err != nil {
+		shared.Log.Error("username check failed",
+			zap.String("operation", "usernameExists"),
+			zap.String("username", username),
+			zap.Error(err))
+		return false, shared.ErrDatabaseOperation.WithDetails("username check failed").WithDetails(err.Error())
+	}
+	return count > 0, nil
+}
+
+func (r *userRepository) emailExists(tx *gorm.DB, email string, excludeID uint) (bool, error) {
+	var count int64
+	if err := tx.Model(&domain.User{}).
+		Where("email = ? AND id <> ?", email, excludeID).
+		Count(&count).Error; err != nil {
+		shared.Log.Error("email check failed",
+			zap.String("operation", "emailExists"),
+			zap.String("email", email),
+			zap.Error(err))
+		return false, shared.ErrDatabaseOperation.WithDetails("email check failed").WithDetails(err.Error())
+	}
+	return count > 0, nil
+}
+
+func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
+	err := r.db.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("id = ?", userID).
+		Update("password_hash", passwordHash).Error
+	if err != nil {
+		shared.Log.Error("update password failed",
+			zap.String("operation", "UpdatePassword"),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return shared.ErrDatabaseOperation.WithDetails("update password failed").WithDetails(err.Error())
+	}
+	return nil
+}
+
+
+// ===== END OF ./internal/infrastructure/database/user_repository.go =====
+
+
+// FILE: ./internal/shared/errors.go
+
+package shared
+
+import (
+	"errors"
+	"net/http"
+
+	"gorm.io/gorm"
+)
+
+const (
+	EmailRegexPattern = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
+)
+
+type Error struct {
+	Code    string      `json:"code"`    // Machine-readable code
+	Message string      `json:"message"` // Human-readable message
+	Status  int         `json:"-"`       // HTTP status code
+	Details interface{} `json:"details,omitempty"`
+}
+
+func (e Error) Error() string {
+	return e.Message
+}
+
+func (e Error) WithDetails(details interface{}) Error {
+	return Error{
+		Code:    e.Code,
+		Message: e.Message,
+		Status:  e.Status,
+		Details: details,
+	}
+}
+
+// Predefined common errors
+var (
+	// 4xx Errors
+	ErrBadRequest = Error{
+		Code:    "BAD_REQUEST",
+		Message: "Invalid request",
+		Status:  http.StatusBadRequest,
+	}
+
+	ErrUnauthorized = Error{
+		Code:    "UNAUTHORIZED",
+		Message: "Not authorized",
+		Status:  http.StatusUnauthorized,
+	}
+
+	ErrForbidden = Error{
+		Code:    "FORBIDDEN",
+		Message: "Access denied",
+		Status:  http.StatusForbidden,
+	}
+
+	ErrNotFound = Error{
+		Code:    "NOT_FOUND",
+		Message: "Resource not found",
+		Status:  http.StatusNotFound,
+	}
+	ErrConflict = Error{
+		Code:    "CONFLICT",
+		Message: "Resource already exists",
+		Status:  http.StatusConflict,
+	}
+
+	// Validation Errors
+	ErrValidation = Error{
+		Code:    "VALIDATION_ERROR",
+		Message: "Validation failed",
+		Status:  http.StatusBadRequest,
+	}
+
+	ErrUsernameTooShort = Error{
+		Code:    "USERNAME_TOO_SHORT",
+		Message: "Username must be at least 3 characters",
+		Status:  http.StatusBadRequest,
+	}
+	ErrInvalidEmailFormat = Error{
+		Code:    "INVALID_EMAIL_FORMAT",
+		Message: "Email must be a valid format",
+		Status:  http.StatusBadRequest,
+	}
+	ErrPasswordTooWeak = Error{
+		Code:    "PASSWORD_TOO_WEAK",
+		Message: "Password must be at least 8 characters",
+		Status:  http.StatusBadRequest,
+	}
+
+	// 5xx Errors
+	ErrInternalServer = Error{
+		Code:    "INTERNAL_ERROR",
+		Message: "Internal server error",
+		Status:  http.StatusInternalServerError,
+	}
+
+	// Domain-specific errors
+	ErrUserNotFound = Error{
+		Code:    "USER_NOT_FOUND",
+		Message: "User not found",
+		Status:  http.StatusNotFound,
+	}
+
+	ErrUserExists = Error{
+		Code:    "USER_EXISTS",
+		Message: "User already exists",
+		Status:  http.StatusConflict,
+	}
+
+	ErrInvalidCredentials = Error{
+		Code:    "INVALID_CREDENTIALS",
+		Message: "Invalid username or password",
+		Status:  http.StatusUnauthorized,
+	}
+
+	ErrWeakPassword = Error{
+		Code:    "WEAK_PASSWORD",
+		Message: "Password must be at least 8 characters",
+		Status:  http.StatusBadRequest,
+	}
+
+	// Database errors
+	ErrDatabaseOperation = Error{
+		Code:    "DATABASE_ERROR",
+		Message: "Database operation failed",
+		Status:  http.StatusInternalServerError,
+	}
+
+	ErrRecordNotFound = Error{
+		Code:    "RECORD_NOT_FOUND",
+		Message: "Record not found",
+		Status:  http.StatusNotFound,
+	}
+
+	ErrDuplicateEntry = Error{
+		Code:    "DUPLICATE_ENTRY",
+		Message: "Duplicate entry",
+		Status:  http.StatusConflict,
+	}
+
+	//Generic
+	ErrRateLimited = Error{
+		Code:    "RATE_LIMITED",
+		Message: "Too many requests",
+		Status:  http.StatusTooManyRequests,
+	}
+	ErrServiceUnavailable = Error{
+		Code:    "SERVICE_UNAVAILABLE",
+		Message: "Service temporarily unavailable",
+		Status:  http.StatusServiceUnavailable,
+	}
+)
+
+// Helper to convert third-party errors to the local error type
+func NormalizeError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrRecordNotFound
+	}
+
+	return err
+}
+
+
+// ===== END OF ./internal/shared/errors.go =====
+
+
+// FILE: ./internal/shared/logger.go
+
+package shared
+
+import (
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+)
+
+var Log *zap.Logger
+
+func InitLogger(env string) {
+	config := zap.NewProductionConfig()
+	if env == "development" {
+		config = zap.NewDevelopmentConfig()
+	}
+
+	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	logger, err := config.Build()
+	if err != nil {
+		panic(err)
+	}
+
+	Log = logger
+	defer Log.Sync() // Flush logs on exit
+}
+
+// Usage: Log.Error("Failed to create user", zap.Error(err), zap.String("username", username))
+
+
+// ===== END OF ./internal/shared/logger.go =====
+
+

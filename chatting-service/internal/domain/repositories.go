@@ -26,7 +26,8 @@ type UserRepository interface {
 	Update(ctx context.Context, userID uint, username, email string) error
 	UpdatePassword(ctx context.Context, userID uint, passwordHash string) error
 	UpdateLastActiveAt(ctx context.Context, userID uint) error
-	Exists(ctx context.Context, username string) (bool, error)
+	Exists(ctx context.Context, userID uint) (bool, error)
+	ExistsByUsername(ctx context.Context, username string) (bool, error)
 }
 
 type MessageRepository interface {

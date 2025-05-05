@@ -1,30 +1,35 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 func SetupHealthRoutes(app *fiber.App, db *gorm.DB) {
 	app.Get("/api/health", func(c *fiber.Ctx) error {
+		logger := c.Locals("logger").(*zap.Logger)
+		start := time.Now()
+
 		sqlDB, err := db.DB()
 		if err != nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"status":  "down",
-				"message": "Database connection failed",
-			})
+			logger.Error("Database connection failed",
+				zap.Error(err),
+				zap.Duration("latency", time.Since(start)))
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "error"})
 		}
 
 		if err := sqlDB.Ping(); err != nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"status":  "down",
-				"message": "Database ping failed",
-			})
+			logger.Error("Database ping failed",
+				zap.Error(err),
+				zap.Duration("latency", time.Since(start)))
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "error"})
 		}
 
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"message": "Chatting Service is running 🚀",
-		})
+		logger.Info("Health check succeeded",
+			zap.Duration("latency", time.Since(start)))
+		return c.JSON(fiber.Map{"status": "ok"})
 	})
 }

@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,21 +30,21 @@ func TestUserModel(t *testing.T) {
 				modifyFn: func(u *User) {
 					u.Username = "ab"
 				},
-				expectedErr: shared.ErrUsernameTooShort,
+				expectedErr: ErrUsernameTooShort,
 			},
 			{
 				name: "InvalidEmail",
 				modifyFn: func(u *User) {
 					u.Email = "invalid-email"
 				},
-				expectedErr: shared.ErrInvalidEmail,
+				expectedErr: ErrInvalidEmail,
 			},
 			{
 				name: "EmptyPasswordHash",
 				modifyFn: func(u *User) {
 					u.PasswordHash = ""
 				},
-				expectedErr: shared.ErrWeakPassword,
+				expectedErr: ErrWeakPassword,
 			},
 		}
 
@@ -71,7 +70,7 @@ func TestUserModel(t *testing.T) {
 		t.Run("RejectWeakPassword", func(t *testing.T) {
 			u := baseUser
 			err := u.SetPassword("short")
-			assert.ErrorIs(t, err, shared.ErrWeakPassword)
+			assert.ErrorIs(t, err, ErrWeakPassword)
 			assert.Equal(t, baseUser.PasswordHash, u.PasswordHash)
 		})
 
@@ -115,7 +114,7 @@ func TestUserModel(t *testing.T) {
 				Email:    "new@example.com",
 			}
 			err := u.BeforeCreate(nil)
-			assert.ErrorIs(t, err, shared.ErrUsernameTooShort)
+			assert.ErrorIs(t, err, ErrUsernameTooShort)
 		})
 
 		// t.Run("BeforeUpdateValidates", func(t *testing.T) {

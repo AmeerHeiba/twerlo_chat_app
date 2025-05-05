@@ -5,6 +5,7 @@ package main
 import (
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/AmeerHeiba/chatting-service/internal/application"
 	"github.com/AmeerHeiba/chatting-service/internal/config"
@@ -15,9 +16,19 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+func stackTraceHandler(c *fiber.Ctx, e interface{}) {
+	shared.Log.Error("Recovered from panic",
+		zap.Any("error", e),
+		zap.String("path", c.Path()),
+		zap.ByteString("stack", debug.Stack()),
+	)
+}
 
 func main() {
 	// Load environment
@@ -29,6 +40,10 @@ func main() {
 	db := initDB()
 	app := fiber.New()
 	shared.InitLogger(os.Getenv("APP_ENV"))
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace:  true,              // Include stack trace in logs
+		StackTraceHandler: stackTraceHandler, // Custom stack trace handler
+	}))
 	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
 
@@ -46,8 +61,10 @@ func main() {
 			"path":    c.Path(),
 		})
 	})
+
 	// Start server
 	startServer(app)
+
 }
 
 func initDB() *gorm.DB {
@@ -203,8 +220,7 @@ func (s *AuthService) Register(ctx context.Context, username, email, password st
 			zap.String("operation", "Create"),
 			zap.Error(err),
 			zap.String("username", username),
-			zap.String("email", email),
-			zap.String("password_hash", user.PasswordHash))
+			zap.String("email", email))
 		return nil, shared.ErrDatabaseOperation.WithDetails("create user failed").WithDetails(err.Error())
 	}
 
@@ -424,7 +440,6 @@ func (s *MessageService) SendDirectMessage(ctx context.Context, senderID, recipi
 		shared.Log.Error("create message failed",
 			zap.String("operation", "SendDirectMessage"),
 			zap.Uint("recipientID", recipientID),
-			zap.Uint("senderID", senderID),
 			zap.Error(err))
 		return nil, err
 	}

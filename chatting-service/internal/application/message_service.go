@@ -14,6 +14,7 @@ type MessageService struct {
 	messageRecipientRepo domain.MessageRecipientRepository
 	userRepo             domain.UserRepository
 	notifier             domain.MessageNotifier // Optional for real-time
+	MediaService         domain.MediaService    //responsible for media operations
 }
 
 func NewMessageService(
@@ -21,12 +22,14 @@ func NewMessageService(
 	messageRecipientRepo domain.MessageRecipientRepository,
 	userRepo domain.UserRepository,
 	notifier domain.MessageNotifier,
+	mediaService domain.MediaService,
 ) *MessageService {
 	return &MessageService{
 		messageRepo:          messageRepo,
 		messageRecipientRepo: messageRecipientRepo,
 		userRepo:             userRepo,
 		notifier:             notifier,
+		MediaService:         mediaService,
 	}
 }
 

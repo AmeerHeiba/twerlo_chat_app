@@ -12,6 +12,7 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/routes"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/auth"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -74,6 +75,14 @@ func initDB() *gorm.DB {
 }
 
 func initDependencies(db *gorm.DB) routes.Dependencies {
+	// Initialize storage
+	localStorage := storage.NewLocalStorage(
+		os.Getenv("MEDIA_STORAGE_PATH"),
+		os.Getenv("MEDIA_BASE_URL"),
+	)
+	mediaService := application.NewMediaService(localStorage)
+	mediaHandler := handlers.NewMediaHandler(mediaService)
+
 	// Repositories
 	userRepo := database.NewUserRepository(db)
 	messageRepo := database.NewMessageRepository(db)
@@ -84,7 +93,7 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 	authCfg := config.LoadAuthConfig()
 	jwtProvider := auth.NewJWTProvider(authCfg)
 	authService := application.NewAuthService(userRepo, userService, jwtProvider)
-	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil)
+	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil, mediaService)
 
 	// Handlers
 	return routes.Dependencies{
@@ -92,6 +101,7 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 		UserHandler:    handlers.NewUserHandler(userService),
 		AuthHandler:    handlers.NewAuthHandler(authService),
 		MessageHandler: handlers.NewMessageHandler(messageService),
+		MediaHandler:   mediaHandler,
 		JWTProvider:    jwtProvider,
 	}
 }

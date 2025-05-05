@@ -76,15 +76,16 @@ type AuthService interface {
 //Media Interfaces
 
 type MediaStorage interface {
-	Upload(ctx context.Context, file io.Reader, filename string, size int64) (string, error)
-	Delete(ctx context.Context, url string) error
-	GetSignedURL(ctx context.Context, url string) (string, error)
+	Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error)
+	GetURL(ctx context.Context, path string) (string, error)
+	Delete(ctx context.Context, path string) error
+	GetSignedURL(ctx context.Context, path string, expires time.Duration) (string, error) // For enabling signed URLs use in cloud storage if cloud storage is used later
 }
 
 type MediaService interface {
-	Upload(ctx context.Context, userID uint, file io.Reader, filename string, size int64) (*MediaResponse, error)
+	Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*MediaResponse, error)
 	GetByUser(ctx context.Context, userID uint) ([]MediaResponse, error)
-	Delete(ctx context.Context, userID uint, mediaID uint) error
+	Delete(ctx context.Context, userID uint, path string) error
 }
 
 //Real Time Interfaces

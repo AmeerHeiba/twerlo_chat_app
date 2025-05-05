@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"strings"
 
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
@@ -23,6 +24,9 @@ func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
 				"error": "Invalid token",
 			})
 		}
+
+		ctx := context.WithValue(c.Context(), "userID", claims.UserID)
+		c.SetUserContext(ctx)
 
 		// Store claims in context for downstream handlers
 		c.Locals("userClaims", claims)

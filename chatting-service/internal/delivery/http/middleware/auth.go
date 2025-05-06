@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"strings"
 
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
@@ -25,11 +24,10 @@ func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
 			})
 		}
 
-		ctx := context.WithValue(c.Context(), "userID", claims.UserID)
-		c.SetUserContext(ctx)
-
-		// Store claims in context for downstream handlers
+		// Store userID in context for WebSocket handler
+		c.Locals("userID", claims.UserID)
 		c.Locals("userClaims", claims)
+
 		return c.Next()
 	}
 }

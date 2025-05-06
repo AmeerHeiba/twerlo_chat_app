@@ -14,6 +14,7 @@ type Dependencies struct {
 	AuthHandler    *handlers.AuthHandler
 	MessageHandler *handlers.MessageHandler
 	MediaHandler   *handlers.MediaHandler
+	WSHandler      *handlers.WebSocketHandler
 	JWTProvider    domain.TokenProvider
 }
 
@@ -28,9 +29,11 @@ func SetupRoutes(app *fiber.App, deps Dependencies) {
 	SetupUserRoutes(app, deps.UserHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
 	// Message routes (protected)
-	SetupMessageRoutes(app, deps.MessageHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+	SetupMessageRoutes(app, deps.MessageHandler, deps.WSHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
 	// Media routes (protected)
 	SetupMediaRoutes(app, deps.MediaHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
+	// WebSocket routes	(protected)
+	SetupWebSocketRoutes(app, deps.WSHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 }

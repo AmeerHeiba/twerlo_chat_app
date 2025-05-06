@@ -97,12 +97,6 @@ type MessageNotifier interface {
 	Broadcast(ctx context.Context, message *Message, recipientIDs []uint) error
 }
 
-type PresenceTracker interface {
-	Track(ctx context.Context, userID uint) error
-	Untrack(ctx context.Context, userID uint) error
-	GetOnline(ctx context.Context) ([]uint, error)
-}
-
 // Transaction Manager for repositories
 
 type Repositories struct {

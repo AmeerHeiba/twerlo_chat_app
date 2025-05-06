@@ -15,6 +15,7 @@ type MessageService struct {
 	userRepo             domain.UserRepository
 	notifier             domain.MessageNotifier // Optional for real-time
 	MediaService         domain.MediaService    //responsible for media operations
+
 }
 
 func NewMessageService(
@@ -78,9 +79,20 @@ func (s *MessageService) SendDirectMessage(ctx context.Context, senderID, recipi
 		return nil, err
 	}
 
+	fullMessage, err := s.messageRepo.FindByID(ctx, msg.ID)
+	if fullMessage == nil {
+		shared.Log.Error("could not find message", zap.Uint("messageID", msg.ID))
+		return nil, shared.ErrNotFound.WithDetails("Could not find message")
+	}
+
 	// Notify recipient (if notifier is configured)
 	if s.notifier != nil {
-		if err := s.notifier.Notify(ctx, msg); err != nil {
+		if err := s.notifier.Notify(ctx, fullMessage); err != nil {
+			shared.Log.Error("notify recipient failed",
+				zap.String("operation", "SendDirectMessage"),
+				zap.Uint("messageID", msg.ID),
+				zap.Error(err))
+			//will continue even if notify fails
 		}
 	}
 

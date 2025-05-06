@@ -12,18 +12,18 @@ import (
 
 type Message struct {
 	gorm.Model
-	Content     string        `gorm:"type:text"`
-	MediaURL    string        `gorm:"type:varchar(255)"`
-	MessageType MessageType   `gorm:"type:message_type;default:'direct'"`
-	Status      MessageStatus `gorm:"type:message_status;default:'sent'"`
+	Content     string        `gorm:"type:text" json:"content"`
+	MediaURL    string        `gorm:"type:varchar(255)" json:"media_url,omitempty"`
+	MessageType MessageType   `gorm:"type:message_type;default:'direct'" json:"message_type"`
+	Status      MessageStatus `gorm:"type:message_status;default:'sent'" json:"status"`
 
 	// Relationships
 	//Using foreign keys and gorm models to allow eager/lazy loading
-	SenderID uint `gorm:"index"` // Foreign key to User
-	Sender   User `gorm:"foreignKey:SenderID"`
+	SenderID uint `gorm:"index" json:"sender_id"` // Foreign key to User
+	Sender   User `gorm:"foreignKey:SenderID" json:"-"`
 
-	RecipientID *uint `gorm:"index;null"` // Null for broadcasts
-	Recipient   *User `gorm:"foreignKey:RecipientID"`
+	RecipientID *uint `gorm:"index;null" json:"recipient_id"`
+	Recipient   *User `gorm:"foreignKey:RecipientID" json:"-"`
 
 	BroadcasterID *uint `gorm:"index;null"` // For broadcast origin
 	Broadcaster   *User `gorm:"foreignKey:BroadcasterID"`
@@ -32,9 +32,9 @@ type Message struct {
 	Recipients []User `gorm:"many2many:message_recipients;joinForeignKey:MessageID;joinReferences:UserID"`
 
 	// Metadata
-	SentAt      time.Time `gorm:"index;default:CURRENT_TIMESTAMP"`
-	DeliveredAt *time.Time
-	ReadAt      *time.Time
+	SentAt      time.Time  `gorm:"index;default:CURRENT_TIMESTAMP" json:"sent_at"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+	ReadAt      *time.Time `json:"read_at,omitempty"`
 }
 
 // MessageRecipient join table for broadcasts

@@ -12,6 +12,7 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/routes"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/auth"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
@@ -40,8 +41,8 @@ func main() {
 	app := fiber.New()
 	shared.InitLogger(os.Getenv("APP_ENV"))
 	app.Use(recover.New(recover.Config{
-		EnableStackTrace:  true,              // Include stack trace in logs
-		StackTraceHandler: stackTraceHandler, // Custom stack trace handler
+		EnableStackTrace:  true,
+		StackTraceHandler: stackTraceHandler,
 	}))
 	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
@@ -52,7 +53,7 @@ func main() {
 	// Setup all routes
 	routes.SetupRoutes(app, deps)
 
-	//Not found route
+	// Not found route
 	app.Use(func(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{
 			"status":  "error",
@@ -63,7 +64,6 @@ func main() {
 
 	// Start server
 	startServer(app)
-
 }
 
 func initDB() *gorm.DB {
@@ -83,6 +83,9 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 	mediaService := application.NewMediaService(localStorage)
 	mediaHandler := handlers.NewMediaHandler(mediaService)
 
+	// Initialize WebSocket notifier (implements MessageNotifier interface)
+	wsNotifier := realtime.NewWebSocketNotifier()
+
 	// Repositories
 	userRepo := database.NewUserRepository(db)
 	messageRepo := database.NewMessageRepository(db)
@@ -93,15 +96,26 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 	authCfg := config.LoadAuthConfig()
 	jwtProvider := auth.NewJWTProvider(authCfg)
 	authService := application.NewAuthService(userRepo, userService, jwtProvider)
-	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil, mediaService)
 
-	// Handlers
+	// Message service with WebSocket notifier
+	messageService := application.NewMessageService(
+		messageRepo,
+		messageRecipientRepo,
+		userRepo,
+		wsNotifier, // This implements MessageNotifier interface
+		mediaService,
+	)
+
+	// WebSocket handler (for routes)
+	wsHandler := handlers.NewWebSocketHandler(wsNotifier)
+
 	return routes.Dependencies{
 		DB:             db,
 		UserHandler:    handlers.NewUserHandler(userService),
 		AuthHandler:    handlers.NewAuthHandler(authService),
 		MessageHandler: handlers.NewMessageHandler(messageService),
 		MediaHandler:   mediaHandler,
+		WSHandler:      wsHandler,
 		JWTProvider:    jwtProvider,
 	}
 }

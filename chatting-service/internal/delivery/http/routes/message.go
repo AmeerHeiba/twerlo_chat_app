@@ -5,7 +5,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, authMiddleware fiber.Handler) {
+func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, wsHandler *handlers.WebSocketHandler, authMiddleware fiber.Handler) {
 	messageGroup := app.Group("/api/messages", authMiddleware)
 
 	messageGroup.Post("/", handler.SendMessage)

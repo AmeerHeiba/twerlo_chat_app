@@ -14,6 +14,8 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/routes"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/auth"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -41,8 +43,8 @@ func main() {
 	app := fiber.New()
 	shared.InitLogger(os.Getenv("APP_ENV"))
 	app.Use(recover.New(recover.Config{
-		EnableStackTrace:  true,              // Include stack trace in logs
-		StackTraceHandler: stackTraceHandler, // Custom stack trace handler
+		EnableStackTrace:  true,
+		StackTraceHandler: stackTraceHandler,
 	}))
 	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
@@ -53,7 +55,7 @@ func main() {
 	// Setup all routes
 	routes.SetupRoutes(app, deps)
 
-	//Not found route
+	// Not found route
 	app.Use(func(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{
 			"status":  "error",
@@ -64,7 +66,6 @@ func main() {
 
 	// Start server
 	startServer(app)
-
 }
 
 func initDB() *gorm.DB {
@@ -76,6 +77,17 @@ func initDB() *gorm.DB {
 }
 
 func initDependencies(db *gorm.DB) routes.Dependencies {
+	// Initialize storage
+	localStorage := storage.NewLocalStorage(
+		os.Getenv("MEDIA_STORAGE_PATH"),
+		os.Getenv("MEDIA_BASE_URL"),
+	)
+	mediaService := application.NewMediaService(localStorage)
+	mediaHandler := handlers.NewMediaHandler(mediaService)
+
+	// Initialize WebSocket notifier (implements MessageNotifier interface)
+	wsNotifier := realtime.NewWebSocketNotifier()
+
 	// Repositories
 	userRepo := database.NewUserRepository(db)
 	messageRepo := database.NewMessageRepository(db)
@@ -86,14 +98,26 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 	authCfg := config.LoadAuthConfig()
 	jwtProvider := auth.NewJWTProvider(authCfg)
 	authService := application.NewAuthService(userRepo, userService, jwtProvider)
-	messageService := application.NewMessageService(messageRepo, messageRecipientRepo, userRepo, nil)
 
-	// Handlers
+	// Message service with WebSocket notifier
+	messageService := application.NewMessageService(
+		messageRepo,
+		messageRecipientRepo,
+		userRepo,
+		wsNotifier, // This implements MessageNotifier interface
+		mediaService,
+	)
+
+	// WebSocket handler (for routes)
+	wsHandler := handlers.NewWebSocketHandler(wsNotifier)
+
 	return routes.Dependencies{
 		DB:             db,
 		UserHandler:    handlers.NewUserHandler(userService),
 		AuthHandler:    handlers.NewAuthHandler(authService),
 		MessageHandler: handlers.NewMessageHandler(messageService),
+		MediaHandler:   mediaHandler,
+		WSHandler:      wsHandler,
 		JWTProvider:    jwtProvider,
 	}
 }
@@ -375,6 +399,115 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uint, currentPa
 // ===== END OF ./internal/application/auth_service.go =====
 
 
+// FILE: ./internal/application/media_service.go
+
+package application
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"path/filepath"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+)
+
+type MediaService struct {
+	storage domain.MediaStorage
+}
+
+func NewMediaService(storage domain.MediaStorage) *MediaService {
+	return &MediaService{
+		storage: storage,
+	}
+}
+
+func (s *MediaService) Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*domain.MediaResponse, error) {
+	// Validate file size
+	if size > 10*1024*1024 { // 10MB
+		shared.Log.Debug("file too large",
+			zap.Int64("size", size),
+			zap.Uint("userID", userID))
+		return nil, shared.ErrValidation.WithDetails("file size exceeds 10MB limit")
+	}
+
+	// Generate unique filename
+	uniqueFilename := generateUniqueFilename(userID, filename)
+
+	// Upload to storage
+	path, err := s.storage.Upload(ctx, file, uniqueFilename, contentType, size)
+	if err != nil {
+		shared.Log.Error("failed to upload media",
+			zap.String("filename", filename),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	// Get public URL
+	url, err := s.storage.GetURL(ctx, path)
+	if err != nil {
+		shared.Log.Error("failed to get media URL",
+			zap.String("path", path),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	return &domain.MediaResponse{
+		URL:         url,
+		Size:        size,
+		ContentType: contentType,
+		UploadedAt:  time.Now().UTC(),
+	}, nil
+}
+
+func (s *MediaService) Delete(ctx context.Context, userID uint, path string) error {
+	err := s.storage.Delete(ctx, path)
+	if err != nil {
+		shared.Log.Error("failed to delete media",
+			zap.String("path", path),
+			zap.Uint("userID", userID),
+			zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (s *MediaService) GetByUser(ctx context.Context, userID uint) ([]domain.MediaResponse, error) {
+	return nil, nil
+}
+
+func generateUniqueFilename(userID uint, original string) string {
+	ext := filepath.Ext(original)
+	// base := strings.TrimSuffix(filepath.Base(original), ext)
+
+	randStr, _ := generateRandomString(8) // 8 character random string
+
+	return fmt.Sprintf("%d_%d_%s%s",
+		userID,
+		time.Now().UnixNano(),
+		randStr,
+		ext)
+}
+
+func generateRandomString(length int) (string, error) {
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(bytes)[:length], nil
+}
+
+
+// ===== END OF ./internal/application/media_service.go =====
+
+
 // FILE: ./internal/application/message_service.go
 
 package application
@@ -393,6 +526,8 @@ type MessageService struct {
 	messageRecipientRepo domain.MessageRecipientRepository
 	userRepo             domain.UserRepository
 	notifier             domain.MessageNotifier // Optional for real-time
+	MediaService         domain.MediaService    //responsible for media operations
+
 }
 
 func NewMessageService(
@@ -400,12 +535,14 @@ func NewMessageService(
 	messageRecipientRepo domain.MessageRecipientRepository,
 	userRepo domain.UserRepository,
 	notifier domain.MessageNotifier,
+	mediaService domain.MediaService,
 ) *MessageService {
 	return &MessageService{
 		messageRepo:          messageRepo,
 		messageRecipientRepo: messageRecipientRepo,
 		userRepo:             userRepo,
 		notifier:             notifier,
+		MediaService:         mediaService,
 	}
 }
 
@@ -985,6 +1122,67 @@ func (h *AuthHandler) ChangePassword(c *fiber.Ctx) error {
 // ===== END OF ./internal/delivery/http/handlers/auth_handler.go =====
 
 
+// FILE: ./internal/delivery/http/handlers/media_handler.go
+
+package handlers
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+type MediaHandler struct {
+	mediaService *application.MediaService
+}
+
+func NewMediaHandler(mediaService *application.MediaService) *MediaHandler {
+	return &MediaHandler{mediaService: mediaService}
+}
+
+func (h *MediaHandler) Upload(c *fiber.Ctx) error {
+	ctx := c.UserContext()
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	// Get file from form
+	file, err := c.FormFile("file")
+	if err != nil {
+		shared.Log.Error("failed to get file from form",
+			zap.Error(err))
+		return shared.ErrBadRequest.WithDetails("file is required")
+	}
+
+	// Open file
+	src, err := file.Open()
+	if err != nil {
+		shared.Log.Error("failed to open uploaded file",
+			zap.Error(err))
+		return shared.ErrBadRequest.WithDetails("invalid file")
+	}
+	defer src.Close()
+
+	// Upload
+	response, err := h.mediaService.Upload(
+		ctx,
+		claims.UserID,
+		src,
+		file.Filename,
+		file.Header.Get("Content-Type"),
+		file.Size,
+	)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(response)
+}
+
+
+// ===== END OF ./internal/delivery/http/handlers/media_handler.go =====
+
+
 // FILE: ./internal/delivery/http/handlers/message_handler.go
 
 package handlers
@@ -1315,6 +1513,36 @@ func (h *UserHandler) GetMessageHistory(c *fiber.Ctx) error {
 // ===== END OF ./internal/delivery/http/handlers/user_handler.go =====
 
 
+// FILE: ./internal/delivery/http/handlers/websocket_handler.go
+
+package handlers
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
+)
+
+type WebSocketHandler struct {
+	notifier *realtime.WebSocketNotifier
+}
+
+func NewWebSocketHandler(notifier *realtime.WebSocketNotifier) *WebSocketHandler {
+	return &WebSocketHandler{notifier: notifier}
+}
+
+func (h *WebSocketHandler) Upgrade(c *fiber.Ctx) error {
+	return h.notifier.Upgrade(c)
+}
+
+func (h *WebSocketHandler) HandleConnection(conn *websocket.Conn) {
+	h.notifier.HandleConnection(conn)
+}
+
+
+// ===== END OF ./internal/delivery/http/handlers/websocket_handler.go =====
+
+
 // FILE: ./internal/delivery/http/middleware/auth.go
 
 package middleware
@@ -1343,8 +1571,10 @@ func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
 			})
 		}
 
-		// Store claims in context for downstream handlers
+		// Store userID in context for WebSocket handler
+		c.Locals("userID", claims.UserID)
 		c.Locals("userClaims", claims)
+
 		return c.Next()
 	}
 }
@@ -1536,6 +1766,24 @@ func SetupHealthRoutes(app *fiber.App, db *gorm.DB) {
 // ===== END OF ./internal/delivery/http/routes/health.go =====
 
 
+// FILE: ./internal/delivery/http/routes/media.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/gofiber/fiber/v2"
+)
+
+func SetupMediaRoutes(app *fiber.App, handler *handlers.MediaHandler, authMiddleware fiber.Handler) {
+	media := app.Group("/api/media", authMiddleware)
+	media.Post("/upload", handler.Upload)
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/media.go =====
+
+
 // FILE: ./internal/delivery/http/routes/message.go
 
 package routes
@@ -1545,7 +1793,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, authMiddleware fiber.Handler) {
+func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, wsHandler *handlers.WebSocketHandler, authMiddleware fiber.Handler) {
 	messageGroup := app.Group("/api/messages", authMiddleware)
 
 	messageGroup.Post("/", handler.SendMessage)
@@ -1576,6 +1824,8 @@ type Dependencies struct {
 	UserHandler    *handlers.UserHandler
 	AuthHandler    *handlers.AuthHandler
 	MessageHandler *handlers.MessageHandler
+	MediaHandler   *handlers.MediaHandler
+	WSHandler      *handlers.WebSocketHandler
 	JWTProvider    domain.TokenProvider
 }
 
@@ -1590,8 +1840,13 @@ func SetupRoutes(app *fiber.App, deps Dependencies) {
 	SetupUserRoutes(app, deps.UserHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
 	// Message routes (protected)
-	SetupMessageRoutes(app, deps.MessageHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+	SetupMessageRoutes(app, deps.MessageHandler, deps.WSHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 
+	// Media routes (protected)
+	SetupMediaRoutes(app, deps.MediaHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
+
+	// WebSocket routes	(protected)
+	SetupWebSocketRoutes(app, deps.WSHandler, middleware.NewAuthMiddleware(deps.JWTProvider))
 }
 
 
@@ -1617,6 +1872,28 @@ func SetupUserRoutes(app *fiber.App, handler *handlers.UserHandler, authMiddlewa
 
 
 // ===== END OF ./internal/delivery/http/routes/user.go =====
+
+
+// FILE: ./internal/delivery/http/routes/websocket.go
+
+package routes
+
+import (
+	"github.com/AmeerHeiba/chatting-service/internal/delivery/http/handlers"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
+)
+
+func SetupWebSocketRoutes(app *fiber.App, wsHandler *handlers.WebSocketHandler, authMiddleware fiber.Handler) {
+	app.Get("/ws",
+		authMiddleware,
+		wsHandler.Upgrade,
+		websocket.New(wsHandler.HandleConnection),
+	)
+}
+
+
+// ===== END OF ./internal/delivery/http/routes/websocket.go =====
 
 
 // FILE: ./internal/domain/auth.go
@@ -2218,15 +2495,16 @@ type AuthService interface {
 //Media Interfaces
 
 type MediaStorage interface {
-	Upload(ctx context.Context, file io.Reader, filename string, size int64) (string, error)
-	Delete(ctx context.Context, url string) error
-	GetSignedURL(ctx context.Context, url string) (string, error)
+	Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error)
+	GetURL(ctx context.Context, path string) (string, error)
+	Delete(ctx context.Context, path string) error
+	GetSignedURL(ctx context.Context, path string, expires time.Duration) (string, error) // For enabling signed URLs use in cloud storage if cloud storage is used later
 }
 
 type MediaService interface {
-	Upload(ctx context.Context, userID uint, file io.Reader, filename string, size int64) (*MediaResponse, error)
+	Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*MediaResponse, error)
 	GetByUser(ctx context.Context, userID uint) ([]MediaResponse, error)
-	Delete(ctx context.Context, userID uint, mediaID uint) error
+	Delete(ctx context.Context, userID uint, path string) error
 }
 
 //Real Time Interfaces
@@ -2236,12 +2514,6 @@ type MessageNotifier interface {
 	Unsubscribe(ctx context.Context, userID uint) error
 	Notify(ctx context.Context, message *Message) error
 	Broadcast(ctx context.Context, message *Message, recipientIDs []uint) error
-}
-
-type PresenceTracker interface {
-	Track(ctx context.Context, userID uint) error
-	Untrack(ctx context.Context, userID uint) error
-	GetOnline(ctx context.Context) ([]uint, error)
 }
 
 // Transaction Manager for repositories
@@ -3482,6 +3754,231 @@ func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwo
 
 
 // ===== END OF ./internal/infrastructure/database/user_repository.go =====
+
+
+// FILE: ./internal/infrastructure/realtime/connection_wrapper.go
+
+package realtime
+
+import (
+	"sync"
+
+	"github.com/gofiber/contrib/websocket"
+)
+
+// ConnectionWrapper bridges fiber/websocket and our notifier
+type ConnectionWrapper struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *ConnectionWrapper) WriteJSON(v interface{}) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteJSON(v)
+}
+
+func (w *ConnectionWrapper) ReadMessage() (int, []byte, error) {
+	return w.conn.ReadMessage()
+}
+
+func (w *ConnectionWrapper) Close() error {
+	return w.conn.Close()
+}
+
+
+// ===== END OF ./internal/infrastructure/realtime/connection_wrapper.go =====
+
+
+// FILE: ./internal/infrastructure/realtime/websocket.go
+
+package realtime
+
+import (
+	"context"
+	"sync"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+type WebSocketNotifier struct {
+	clients   map[uint]*ConnectionWrapper
+	clientsMu sync.Mutex
+}
+
+func NewWebSocketNotifier() *WebSocketNotifier {
+	return &WebSocketNotifier{
+		clients: make(map[uint]*ConnectionWrapper),
+	}
+}
+
+func (w *WebSocketNotifier) Notify(ctx context.Context, message *domain.Message) error {
+	shared.Log.Debug("Broadcasting message", zap.Any("message", message))
+	if message.RecipientID == nil {
+		return domain.ErrInvalidRecipient
+	}
+
+	w.clientsMu.Lock()
+	defer w.clientsMu.Unlock()
+
+	if conn, ok := w.clients[*message.RecipientID]; ok {
+		shared.Log.Debug("Sending message", zap.Any("message", message), zap.Uint("recipientID", *message.RecipientID))
+		return conn.WriteJSON(message)
+	}
+	return nil
+}
+
+func (w *WebSocketNotifier) Broadcast(ctx context.Context, message *domain.Message, recipientIDs []uint) error {
+	w.clientsMu.Lock()
+	defer w.clientsMu.Unlock()
+
+	for _, id := range recipientIDs {
+		if conn, ok := w.clients[id]; ok {
+			if err := conn.WriteJSON(message); err != nil {
+				zap.L().Error("websocket broadcast failed",
+					zap.Uint("userID", id),
+					zap.Error(err))
+			}
+		}
+	}
+	return nil
+}
+
+func (w *WebSocketNotifier) RegisterClient(userID uint, conn *websocket.Conn) {
+	w.clientsMu.Lock()
+	defer w.clientsMu.Unlock()
+	w.clients[userID] = &ConnectionWrapper{conn: conn}
+}
+
+func (w *WebSocketNotifier) RemoveClient(userID uint) {
+	w.clientsMu.Lock()
+	defer w.clientsMu.Unlock()
+	delete(w.clients, userID)
+}
+
+func (w *WebSocketNotifier) Upgrade(c *fiber.Ctx) error {
+	if websocket.IsWebSocketUpgrade(c) {
+		return c.Next()
+	}
+	return fiber.ErrUpgradeRequired
+}
+
+func (w *WebSocketNotifier) HandleConnection(conn *websocket.Conn) {
+	userID := conn.Locals("userID").(uint)
+
+	// Register connection
+	w.RegisterClient(userID, conn)
+	defer w.RemoveClient(userID)
+
+	// Heartbeat handling
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
+}
+
+func (w *WebSocketNotifier) Subscribe(ctx context.Context, userID uint) (<-chan *domain.Message, error) {
+	// Return a channel that will never receive messages
+	return nil, nil
+}
+
+func (w *WebSocketNotifier) Unsubscribe(ctx context.Context, userID uint) error {
+	// No-op since we're not actually maintaining subscriptions
+	return nil
+}
+
+
+// ===== END OF ./internal/infrastructure/realtime/websocket.go =====
+
+
+// FILE: ./internal/infrastructure/storage/local_storage.go
+
+package storage
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"go.uber.org/zap"
+)
+
+type LocalStorage struct {
+	basePath string
+	baseURL  string
+}
+
+func NewLocalStorage(basePath, baseURL string) *LocalStorage {
+	return &LocalStorage{
+		basePath: basePath,
+		baseURL:  baseURL,
+	}
+}
+
+func (s *LocalStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error) {
+	// Get user ID from context
+	userID, ok := ctx.Value("userID").(uint)
+	if !ok {
+		return "", errors.New("user ID not found in context")
+	}
+
+	// Create user-specific directory
+	userPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", userID))
+	if err := os.MkdirAll(userPath, 0755); err != nil {
+		shared.Log.Error("failed to create user directory",
+			zap.String("path", userPath),
+			zap.Error(err))
+		return "", err
+	}
+
+	// Create file
+	filePath := filepath.Join(userPath, filename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		shared.Log.Error("failed to create file",
+			zap.String("path", filePath),
+			zap.Error(err))
+		return "", err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		shared.Log.Error("failed to write file",
+			zap.String("path", filePath),
+			zap.Error(err))
+		return "", err
+	}
+
+	// Return relative path in format "user_<ID>/filename"
+	return filepath.Join(fmt.Sprintf("user_%d", userID), filename), nil
+}
+
+func (s *LocalStorage) GetURL(ctx context.Context, path string) (string, error) {
+	return s.baseURL + "/" + path, nil
+}
+
+func (s *LocalStorage) Delete(ctx context.Context, path string) error {
+	fullPath := filepath.Join(s.basePath, path)
+	return os.Remove(fullPath)
+}
+
+// Dummy for now
+func (s *LocalStorage) GetSignedURL(ctx context.Context, path string, expires time.Duration) (string, error) {
+	return s.baseURL + "/" + path, nil
+}
+
+
+// ===== END OF ./internal/infrastructure/storage/local_storage.go =====
 
 
 // FILE: ./internal/shared/errors.go

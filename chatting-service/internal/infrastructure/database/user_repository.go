@@ -136,20 +136,15 @@ func (r *userRepository) UpdateLastActiveAt(ctx context.Context, userID uint) er
 
 func (r *userRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
 	var user domain.User
-	err := r.db.WithContext(ctx).First(&user, userID).Error
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "password_hash", "last_active_at").
+		First(&user, userID).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		shared.Log.Debug("user not found",
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return nil, shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+		return nil, shared.ErrRecordNotFound.WithDetails("user not found")
 	}
 	if err != nil {
-		shared.Log.Error("find user by ID failed",
-			zap.String("operation", "FindByID"),
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return nil, shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user failed")
 	}
 	return &user, nil
 }
@@ -261,16 +256,15 @@ func (r *userRepository) emailExists(tx *gorm.DB, email string, excludeID uint) 
 }
 
 func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
-	err := r.db.WithContext(ctx).
-		Model(&domain.User{}).
-		Where("id = ?", userID).
-		Update("password_hash", passwordHash).Error
-	if err != nil {
-		shared.Log.Error("update password failed",
-			zap.String("operation", "UpdatePassword"),
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("update password failed").WithDetails(err.Error())
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user domain.User
+		if err := tx.Select("id").First(&user, userID).Error; err != nil {
+			return shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+		}
+
+		if err := tx.Model(&user).Update("password_hash", passwordHash).Error; err != nil {
+			return shared.ErrDatabaseOperation.WithDetails("update password failed").WithDetails(err.Error())
+		}
+		return nil
+	})
 }

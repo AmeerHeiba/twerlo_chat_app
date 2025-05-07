@@ -41,27 +41,34 @@ func (r *messageRecipientRepository) Create(ctx context.Context, messageID uint,
 }
 
 func (r *messageRecipientRepository) CreateBulk(ctx context.Context, messageID uint, recipientIDs []uint) error {
-	recipients := make([]domain.MessageRecipient, len(recipientIDs))
-	for i, id := range recipientIDs {
-		recipients[i] = domain.MessageRecipient{
-			MessageID:  messageID,
-			UserID:     id,
-			ReceivedAt: time.Now().UTC(),
+	if len(recipientIDs) == 0 {
+		return nil
+	}
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Validate recipients exist
+		var count int64
+		if err := tx.Model(&domain.User{}).
+			Where("id IN ?", recipientIDs).
+			Count(&count).Error; err != nil {
+			return shared.ErrDatabaseOperation.WithDetails("recipient validation failed").WithDetails(err.Error())
 		}
-	}
 
-	err := r.db.WithContext(ctx).Create(&recipients).Error
-	if err != nil {
-		shared.Log.Error("create bulk message recipients failed",
-			zap.String("operation", "CreateBulk"),
-			zap.Uint("messageID", messageID),
-			zap.Int("recipientCount", len(recipientIDs)),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("create bulk message recipients failed").WithDetails(err.Error())
-	}
+		if count != int64(len(recipientIDs)) {
+			return domain.ErrInvalidRecipientID
+		}
 
-	shared.Log.Debug("bulk message recipients created",
-		zap.Uint("messageID", messageID),
-		zap.Int("recipientCount", len(recipientIDs)))
-	return nil
+		// Create recipients
+		recipients := make([]domain.MessageRecipient, len(recipientIDs))
+		now := time.Now().UTC()
+		for i, id := range recipientIDs {
+			recipients[i] = domain.MessageRecipient{
+				MessageID:  messageID,
+				UserID:     id,
+				ReceivedAt: now,
+			}
+		}
+
+		return tx.CreateInBatches(recipients, 100).Error // Batch insert for performance
+	})
 }

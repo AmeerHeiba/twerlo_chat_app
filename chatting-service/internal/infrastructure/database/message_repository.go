@@ -45,14 +45,7 @@ func (r *messageRepository) Create(ctx context.Context, senderID uint, content, 
 func (r *messageRepository) CreateWithRecipients(ctx context.Context, msg *domain.Message, recipientIDs []uint) (*domain.Message, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(msg).Error; err != nil {
-			shared.Log.Error("create message with recipients failed",
-				zap.String("operation", "CreateWithRecipients"),
-				zap.Uint("senderID", msg.SenderID),
-				zap.String("content", msg.Content),
-				zap.String("mediaURL", msg.MediaURL),
-				zap.String("messageType", string(msg.MessageType)),
-				zap.Error(err))
-			return shared.ErrDatabaseOperation.WithDetails("create message with recipients failed").WithDetails(err.Error())
+			return shared.ErrDatabaseOperation.WithDetails("create message failed")
 		}
 
 		if len(recipientIDs) > 0 {
@@ -65,14 +58,7 @@ func (r *messageRepository) CreateWithRecipients(ctx context.Context, msg *domai
 				}
 			}
 			if err := tx.Create(&recipients).Error; err != nil {
-				shared.Log.Error("create message recipients failed",
-					zap.String("operation", "CreateWithRecipients"),
-					zap.Uint("senderID", msg.SenderID),
-					zap.String("content", msg.Content),
-					zap.String("mediaURL", msg.MediaURL),
-					zap.String("messageType", string(msg.MessageType)),
-					zap.Error(err))
-				return shared.ErrDatabaseOperation.WithDetails("create message recipients failed").WithDetails(err.Error())
+				return shared.ErrDatabaseOperation.WithDetails("create recipients failed")
 			}
 		}
 		return nil
@@ -115,21 +101,14 @@ func (r *messageRepository) FindConversation(ctx context.Context, user1ID, user2
 	var messages []domain.Message
 
 	q := r.db.WithContext(ctx).
-		Preload("Sender").
+		Joins("Sender").
 		Where("((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))",
-			user1ID, user2ID, user2ID, user1ID).
-		Where("deleted_at IS NULL")
+			user1ID, user2ID, user2ID, user1ID)
 
 	q = applyMessageQuery(q, query)
 
-	err := q.Find(&messages).Error
-	if err != nil {
-		shared.Log.Error("find conversation failed",
-			zap.String("operation", "FindConversation"),
-			zap.Uint("user1ID", user1ID),
-			zap.Uint("user2ID", user2ID),
-			zap.Error(err))
-		return nil, shared.ErrDatabaseOperation.WithDetails("find conversation failed").WithDetails(err.Error())
+	if err := q.Find(&messages).Error; err != nil {
+		return nil, shared.ErrDatabaseOperation.WithDetails("find conversation failed")
 	}
 	return messages, nil
 }
@@ -199,24 +178,22 @@ func (r *messageRepository) MarkAsDelivered(ctx context.Context, messageID uint)
 
 func (r *messageRepository) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Update message status if sender is viewing
+		now := time.Now().UTC()
+
+		// Update main message status
 		if err := tx.Model(&domain.Message{}).
 			Where("id = ?", messageID).
 			Updates(map[string]interface{}{
 				"status":  domain.StatusRead,
-				"read_at": time.Now().UTC(),
+				"read_at": now,
 			}).Error; err != nil {
-			shared.Log.Error("mark message as read failed",
-				zap.String("operation", "MarkAsRead"),
-				zap.Uint("messageID", messageID),
-				zap.Error(err))
-			return shared.ErrDatabaseOperation.WithDetails("mark message as read failed").WithDetails(err.Error())
+			return shared.ErrBadRequest.WithDetails("failed to update msg status").WithDetails(err.Error())
 		}
 
-		// Update recipient status for broadcasts
+		// Update recipient status if exists
 		return tx.Model(&domain.MessageRecipient{}).
 			Where("message_id = ? AND user_id = ?", messageID, recipientID).
-			Update("read_at", time.Now().UTC()).Error
+			Update("read_at", now).Error
 	})
 }
 
@@ -257,16 +234,24 @@ func (r *messageRepository) Update(ctx context.Context, messageID uint, recipien
 	})
 }
 
-func (r *messageRepository) Delete(ctx context.Context, messageID uint) error {
-	err := r.db.WithContext(ctx).Delete(&domain.Message{}, messageID).Error
-	if err != nil {
-		shared.Log.Error("delete message failed",
-			zap.String("operation", "Delete"),
-			zap.Uint("messageID", messageID),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("delete message failed").WithDetails(err.Error())
-	}
-	return nil
+func (r *messageRepository) Delete(ctx context.Context, messageID uint, userID uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Verify ownership
+		var count int64
+		if err := tx.Model(&domain.Message{}).
+			Where("id = ? AND (sender_id = ? OR recipient_id = ?)",
+				messageID, userID, userID).
+			Count(&count).Error; err != nil {
+			return shared.ErrBadRequest.WithDetails("message ownership check failed").WithDetails(err.Error())
+		}
+
+		if count == 0 {
+			return shared.ErrForbidden.WithDetails("message not owned by user")
+		}
+
+		// Delete message
+		return tx.Delete(&domain.Message{}, messageID).Error
+	})
 }
 
 // Helper function to apply query filters

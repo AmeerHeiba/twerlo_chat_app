@@ -168,13 +168,3 @@ func (w *WebSocketNotifier) HandleConnection(conn *websocket.Conn) {
 		}
 	}
 }
-
-func (w *WebSocketNotifier) Subscribe(ctx context.Context, userID uint) (<-chan *domain.Message, error) {
-	// Return a channel that will never receive messages
-	return nil, nil
-}
-
-func (w *WebSocketNotifier) Unsubscribe(ctx context.Context, userID uint) error {
-	// No-op since i am not actually maintaining subscriptions
-	return nil
-}

@@ -40,7 +40,7 @@ type MessageRepository interface {
 	MarkAsDelivered(ctx context.Context, messageID uint) error
 	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
 	Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error
-	Delete(ctx context.Context, messageID uint) error
+	Delete(ctx context.Context, messageID uint, userID uint) error
 }
 
 type MessageRecipientRepository interface {
@@ -88,11 +88,15 @@ type MediaService interface {
 	Delete(ctx context.Context, userID uint, path string) error
 }
 
+//Media uploader is only used to define what message services needs from the media operations to avoid circular dependency
+
+type MediaUploader interface {
+	Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*MediaResponse, error)
+}
+
 //Real Time Interfaces
 
 type MessageNotifier interface {
-	Subscribe(ctx context.Context, userID uint) (<-chan *Message, error)
-	Unsubscribe(ctx context.Context, userID uint) error
 	Notify(ctx context.Context, message *Message) error
 	Broadcast(ctx context.Context, message *Message, recipientIDs []uint) error
 }

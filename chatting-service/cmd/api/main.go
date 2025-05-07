@@ -102,7 +102,7 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 		messageRepo,
 		messageRecipientRepo,
 		userRepo,
-		wsNotifier, // This implements MessageNotifier interface
+		wsNotifier,
 		mediaService,
 	)
 

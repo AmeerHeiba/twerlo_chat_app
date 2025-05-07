@@ -14,8 +14,7 @@ type MessageService struct {
 	messageRecipientRepo domain.MessageRecipientRepository
 	userRepo             domain.UserRepository
 	notifier             domain.MessageNotifier // Optional for real-time
-	MediaService         domain.MediaService    //responsible for media operations
-
+	mediaUploader        domain.MediaUploader
 }
 
 func NewMessageService(
@@ -23,14 +22,14 @@ func NewMessageService(
 	messageRecipientRepo domain.MessageRecipientRepository,
 	userRepo domain.UserRepository,
 	notifier domain.MessageNotifier,
-	mediaService domain.MediaService,
+	mediaUploader domain.MediaUploader,
 ) *MessageService {
 	return &MessageService{
 		messageRepo:          messageRepo,
 		messageRecipientRepo: messageRecipientRepo,
 		userRepo:             userRepo,
 		notifier:             notifier,
-		MediaService:         mediaService,
+		mediaUploader:        mediaUploader,
 	}
 }
 
@@ -222,10 +221,11 @@ func (s *MessageService) DeleteMessage(ctx context.Context, messageID uint, user
 		return shared.ErrInvalidCredentials
 	}
 
-	if err := s.messageRepo.Delete(ctx, messageID); err != nil {
+	if err := s.messageRepo.Delete(ctx, messageID, userID); err != nil {
 		shared.Log.Error("delete message failed",
 			zap.String("operation", "DeleteMessage"),
 			zap.Uint("messageID", messageID),
+			zap.Uint("userID", userID),
 			zap.Error(err))
 		return err
 	}

@@ -27,7 +27,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 
 	if err := c.BodyParser(&body); err != nil {
 		shared.Log.Error("Invalid request body", zap.Error(err), zap.ByteString("body", c.Body()))
-		return shared.ErrBadRequest.WithDetails("Invalid request body").WithDetails(err.Error())
+		return shared.ErrBadRequest.WithDetails("Invalid request body")
 	}
 
 	if body.Username == "" || body.Password == "" {
@@ -38,7 +38,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	res, err := h.authService.Login(c.Context(), body.Username, body.Password)
 	if err != nil {
 		shared.Log.Error("Login failed", zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("Login failed").WithDetails(err.Error())
+		return err
 	}
 
 	return c.JSON(res)

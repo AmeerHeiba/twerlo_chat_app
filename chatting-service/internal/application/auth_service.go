@@ -37,7 +37,7 @@ func (s *AuthService) Register(ctx context.Context, username, email, password st
 			zap.Error(err),
 			zap.String("username", username),
 			zap.String("email", email))
-		return nil, shared.ErrDatabaseOperation.WithDetails("create user failed").WithDetails(err.Error())
+		return nil, err
 	}
 
 	// Generate tokens

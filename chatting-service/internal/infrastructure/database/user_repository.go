@@ -38,11 +38,11 @@ func (r *userRepository) Create(ctx context.Context, username, email, passwordHa
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
 				if strings.Contains(err.Error(), "users_username_key") {
 					shared.Log.Debug("username already exists", zap.String("username", username))
-					return shared.ErrValidation.WithDetails("username already exists")
+					return shared.ErrDuplicateEntry.WithDetails("username already exists")
 				}
 				if strings.Contains(err.Error(), "users_email_key") {
 					shared.Log.Debug("email already exists", zap.String("email", email))
-					return shared.ErrValidation.WithDetails("email already exists")
+					return shared.ErrDuplicateEntry.WithDetails("email already exists")
 				}
 			}
 			shared.Log.Error("create user failed",
@@ -62,26 +62,24 @@ func (r *userRepository) Create(ctx context.Context, username, email, passwordHa
 func (r *userRepository) Update(ctx context.Context, userID uint, username, email string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if username != "" {
-			exists, err := r.usernameExists(tx, username, userID)
+			exists, err := r.ExistsByUsername(ctx, username)
 			if err != nil {
 				shared.Log.Error("username check failed",
 					zap.String("operation", "Update"),
-					zap.Uint("userID", userID),
 					zap.String("username", username),
 					zap.Error(err))
 				return shared.ErrDatabaseOperation.WithDetails("username check failed").WithDetails(err.Error())
 			}
 			if exists {
-				return shared.ErrDuplicateEntry.WithDetails("username already exists")
+				return shared.ErrDuplicateEntry.WithDetails("new username already exists")
 			}
 		}
 
 		if email != "" {
-			exists, err := r.emailExists(tx, email, userID)
+			exists, err := r.ExistsByEmail(ctx, email)
 			if err != nil {
 				shared.Log.Error("email check failed",
 					zap.String("operation", "Update"),
-					zap.Uint("userID", userID),
 					zap.String("email", email),
 					zap.Error(err))
 				return shared.ErrDatabaseOperation.WithDetails("email check failed").WithDetails(err.Error())
@@ -159,14 +157,14 @@ func (r *userRepository) FindProfileByID(ctx context.Context, userID uint) (*dom
 		shared.Log.Debug("user profile not found",
 			zap.Uint("userID", userID),
 			zap.Error(err))
-		return nil, shared.ErrRecordNotFound.WithDetails("user profile not found").WithDetails(err.Error())
+		return nil, shared.ErrRecordNotFound.WithDetails("user profile not found")
 	}
 	if err != nil {
 		shared.Log.Error("find user profile by ID failed",
 			zap.String("operation", "FindProfileByID"),
 			zap.Uint("userID", userID),
 			zap.Error(err))
-		return nil, shared.ErrDatabaseOperation.WithDetails("find user profile by ID failed").WithDetails(err.Error())
+		return nil, shared.ErrDatabaseOperation.WithDetails(err.Error())
 	}
 	return &user, nil
 }
@@ -180,14 +178,14 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		shared.Log.Debug("user not found", zap.String("username", username))
-		return nil, shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+		return nil, shared.ErrRecordNotFound.WithDetails("user not found")
 	}
 	if err != nil {
 		shared.Log.Error("find user by username failed",
 			zap.String("operation", "FindByUsername"),
 			zap.String("username", username),
 			zap.Error(err))
-		return nil, shared.ErrRecordNotFound.WithDetails("find user by username failed").WithDetails(err.Error())
+		return nil, shared.ErrRecordNotFound.WithDetails(err.Error())
 	}
 	return &user, nil
 }
@@ -226,31 +224,19 @@ func (r *userRepository) ExistsByUsername(ctx context.Context, username string) 
 	return count > 0, nil
 }
 
-// Helper methods (private to repository)
-func (r *userRepository) usernameExists(tx *gorm.DB, username string, excludeID uint) (bool, error) {
+func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	var count int64
-	if err := tx.Model(&domain.User{}).
-		Where("username = ? AND id <> ?", username, excludeID).
-		Count(&count).Error; err != nil {
-		shared.Log.Error("username check failed",
-			zap.String("operation", "usernameExists"),
-			zap.String("username", username),
-			zap.Error(err))
-		return false, shared.ErrDatabaseOperation.WithDetails("username check failed").WithDetails(err.Error())
-	}
-	return count > 0, nil
-}
+	err := r.db.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("email = ?", email).
+		Count(&count).Error
 
-func (r *userRepository) emailExists(tx *gorm.DB, email string, excludeID uint) (bool, error) {
-	var count int64
-	if err := tx.Model(&domain.User{}).
-		Where("email = ? AND id <> ?", email, excludeID).
-		Count(&count).Error; err != nil {
-		shared.Log.Error("email check failed",
-			zap.String("operation", "emailExists"),
+	if err != nil {
+		shared.Log.Error("user exists check failed",
+			zap.String("operation", "ExistsByEmail"),
 			zap.String("email", email),
 			zap.Error(err))
-		return false, shared.ErrDatabaseOperation.WithDetails("email check failed").WithDetails(err.Error())
+		return false, shared.ErrDatabaseOperation.WithDetails("user exists check failed").WithDetails(err.Error())
 	}
 	return count > 0, nil
 }
@@ -259,7 +245,7 @@ func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwo
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var user domain.User
 		if err := tx.Select("id").First(&user, userID).Error; err != nil {
-			return shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+			return shared.ErrRecordNotFound.WithDetails("user not found")
 		}
 
 		if err := tx.Model(&user).Update("password_hash", passwordHash).Error; err != nil {

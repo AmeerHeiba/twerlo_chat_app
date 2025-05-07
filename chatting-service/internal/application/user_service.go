@@ -28,7 +28,18 @@ func (s *UserService) CreateUser(ctx context.Context, username, email, password 
 	}
 	if exists {
 		shared.Log.Debug("username already exists", zap.String("username", username))
-		return nil, shared.ErrUserExists
+		return nil, shared.ErrUserExists.WithDetails("username already exists")
+	}
+
+	// Check if email exists
+	exists, err = s.userRepo.ExistsByEmail(ctx, email)
+	if err != nil {
+		shared.Log.Error("email check failed", zap.Error(err), zap.String("email", email))
+		return nil, err
+	}
+	if exists {
+		shared.Log.Debug("email already exists", zap.String("email", email))
+		return nil, shared.ErrUserExists.WithDetails("email already exists")
 	}
 
 	// Create domain user
@@ -40,7 +51,7 @@ func (s *UserService) CreateUser(ctx context.Context, username, email, password 
 	// Hash password
 	if err := user.SetPassword(password); err != nil {
 		shared.Log.Error("password must be at least 8 characters", zap.Error(err), zap.String("hashed password", password))
-		return nil, shared.ErrValidation.WithDetails("password must be at least 8 characters").WithDetails(err.Error())
+		return nil, shared.ErrValidation.WithDetails("Set Password failed").WithDetails(err.Error())
 	}
 
 	// Persist user
@@ -103,10 +114,10 @@ func (s *UserService) VerifyCredentials(ctx context.Context, username, password 
 	); err != nil {
 		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			shared.Log.Error("Password comparison failed", zap.Error(err), zap.String("username", username))
-			return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed").WithDetails(err.Error())
+			return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed")
 		}
 		shared.Log.Error("Password comparison failed", zap.Error(err), zap.String("username", username))
-		return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed").WithDetails(err.Error())
+		return nil, shared.ErrInvalidCredentials.WithDetails("password comparison failed")
 	}
 
 	return user, nil

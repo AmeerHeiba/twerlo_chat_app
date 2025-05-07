@@ -104,7 +104,7 @@ func initDependencies(db *gorm.DB) routes.Dependencies {
 		messageRepo,
 		messageRecipientRepo,
 		userRepo,
-		wsNotifier, // This implements MessageNotifier interface
+		wsNotifier,
 		mediaService,
 	)
 
@@ -526,8 +526,7 @@ type MessageService struct {
 	messageRecipientRepo domain.MessageRecipientRepository
 	userRepo             domain.UserRepository
 	notifier             domain.MessageNotifier // Optional for real-time
-	MediaService         domain.MediaService    //responsible for media operations
-
+	mediaUploader        domain.MediaUploader
 }
 
 func NewMessageService(
@@ -535,14 +534,14 @@ func NewMessageService(
 	messageRecipientRepo domain.MessageRecipientRepository,
 	userRepo domain.UserRepository,
 	notifier domain.MessageNotifier,
-	mediaService domain.MediaService,
+	mediaUploader domain.MediaUploader,
 ) *MessageService {
 	return &MessageService{
 		messageRepo:          messageRepo,
 		messageRecipientRepo: messageRecipientRepo,
 		userRepo:             userRepo,
 		notifier:             notifier,
-		MediaService:         mediaService,
+		mediaUploader:        mediaUploader,
 	}
 }
 
@@ -591,9 +590,20 @@ func (s *MessageService) SendDirectMessage(ctx context.Context, senderID, recipi
 		return nil, err
 	}
 
+	fullMessage, err := s.messageRepo.FindByID(ctx, msg.ID)
+	if fullMessage == nil {
+		shared.Log.Error("could not find message", zap.Uint("messageID", msg.ID))
+		return nil, shared.ErrNotFound.WithDetails("Could not find message")
+	}
+
 	// Notify recipient (if notifier is configured)
 	if s.notifier != nil {
-		if err := s.notifier.Notify(ctx, msg); err != nil {
+		if err := s.notifier.Notify(ctx, fullMessage); err != nil {
+			shared.Log.Error("notify recipient failed",
+				zap.String("operation", "SendDirectMessage"),
+				zap.Uint("messageID", msg.ID),
+				zap.Error(err))
+			//will continue even if notify fails
 		}
 	}
 
@@ -723,10 +733,11 @@ func (s *MessageService) DeleteMessage(ctx context.Context, messageID uint, user
 		return shared.ErrInvalidCredentials
 	}
 
-	if err := s.messageRepo.Delete(ctx, messageID); err != nil {
+	if err := s.messageRepo.Delete(ctx, messageID, userID); err != nil {
 		shared.Log.Error("delete message failed",
 			zap.String("operation", "DeleteMessage"),
 			zap.Uint("messageID", messageID),
+			zap.Uint("userID", userID),
 			zap.Error(err))
 		return err
 	}
@@ -2026,18 +2037,18 @@ import (
 
 type Message struct {
 	gorm.Model
-	Content     string        `gorm:"type:text"`
-	MediaURL    string        `gorm:"type:varchar(255)"`
-	MessageType MessageType   `gorm:"type:message_type;default:'direct'"`
-	Status      MessageStatus `gorm:"type:message_status;default:'sent'"`
+	Content     string        `gorm:"type:text" json:"content"`
+	MediaURL    string        `gorm:"type:varchar(255)" json:"media_url,omitempty"`
+	MessageType MessageType   `gorm:"type:message_type;default:'direct'" json:"message_type"`
+	Status      MessageStatus `gorm:"type:message_status;default:'sent'" json:"status"`
 
 	// Relationships
 	//Using foreign keys and gorm models to allow eager/lazy loading
-	SenderID uint `gorm:"index"` // Foreign key to User
-	Sender   User `gorm:"foreignKey:SenderID"`
+	SenderID uint `gorm:"index" json:"sender_id"` // Foreign key to User
+	Sender   User `gorm:"foreignKey:SenderID" json:"-"`
 
-	RecipientID *uint `gorm:"index;null"` // Null for broadcasts
-	Recipient   *User `gorm:"foreignKey:RecipientID"`
+	RecipientID *uint `gorm:"index;null" json:"recipient_id"`
+	Recipient   *User `gorm:"foreignKey:RecipientID" json:"-"`
 
 	BroadcasterID *uint `gorm:"index;null"` // For broadcast origin
 	Broadcaster   *User `gorm:"foreignKey:BroadcasterID"`
@@ -2046,9 +2057,9 @@ type Message struct {
 	Recipients []User `gorm:"many2many:message_recipients;joinForeignKey:MessageID;joinReferences:UserID"`
 
 	// Metadata
-	SentAt      time.Time `gorm:"index;default:CURRENT_TIMESTAMP"`
-	DeliveredAt *time.Time
-	ReadAt      *time.Time
+	SentAt      time.Time  `gorm:"index;default:CURRENT_TIMESTAMP" json:"sent_at"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+	ReadAt      *time.Time `json:"read_at,omitempty"`
 }
 
 // MessageRecipient join table for broadcasts
@@ -2459,7 +2470,7 @@ type MessageRepository interface {
 	MarkAsDelivered(ctx context.Context, messageID uint) error
 	MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error
 	Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error
-	Delete(ctx context.Context, messageID uint) error
+	Delete(ctx context.Context, messageID uint, userID uint) error
 }
 
 type MessageRecipientRepository interface {
@@ -2507,11 +2518,15 @@ type MediaService interface {
 	Delete(ctx context.Context, userID uint, path string) error
 }
 
+//Media uploader is only used to define what message services needs from the media operations to avoid circular dependency
+
+type MediaUploader interface {
+	Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*MediaResponse, error)
+}
+
 //Real Time Interfaces
 
 type MessageNotifier interface {
-	Subscribe(ctx context.Context, userID uint) (<-chan *Message, error)
-	Unsubscribe(ctx context.Context, userID uint) error
 	Notify(ctx context.Context, message *Message) error
 	Broadcast(ctx context.Context, message *Message, recipientIDs []uint) error
 }
@@ -3085,29 +3100,36 @@ func (r *messageRecipientRepository) Create(ctx context.Context, messageID uint,
 }
 
 func (r *messageRecipientRepository) CreateBulk(ctx context.Context, messageID uint, recipientIDs []uint) error {
-	recipients := make([]domain.MessageRecipient, len(recipientIDs))
-	for i, id := range recipientIDs {
-		recipients[i] = domain.MessageRecipient{
-			MessageID:  messageID,
-			UserID:     id,
-			ReceivedAt: time.Now().UTC(),
+	if len(recipientIDs) == 0 {
+		return nil
+	}
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Validate recipients exist
+		var count int64
+		if err := tx.Model(&domain.User{}).
+			Where("id IN ?", recipientIDs).
+			Count(&count).Error; err != nil {
+			return shared.ErrDatabaseOperation.WithDetails("recipient validation failed").WithDetails(err.Error())
 		}
-	}
 
-	err := r.db.WithContext(ctx).Create(&recipients).Error
-	if err != nil {
-		shared.Log.Error("create bulk message recipients failed",
-			zap.String("operation", "CreateBulk"),
-			zap.Uint("messageID", messageID),
-			zap.Int("recipientCount", len(recipientIDs)),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("create bulk message recipients failed").WithDetails(err.Error())
-	}
+		if count != int64(len(recipientIDs)) {
+			return domain.ErrInvalidRecipientID
+		}
 
-	shared.Log.Debug("bulk message recipients created",
-		zap.Uint("messageID", messageID),
-		zap.Int("recipientCount", len(recipientIDs)))
-	return nil
+		// Create recipients
+		recipients := make([]domain.MessageRecipient, len(recipientIDs))
+		now := time.Now().UTC()
+		for i, id := range recipientIDs {
+			recipients[i] = domain.MessageRecipient{
+				MessageID:  messageID,
+				UserID:     id,
+				ReceivedAt: now,
+			}
+		}
+
+		return tx.CreateInBatches(recipients, 100).Error // Batch insert for performance
+	})
 }
 
 
@@ -3163,14 +3185,7 @@ func (r *messageRepository) Create(ctx context.Context, senderID uint, content, 
 func (r *messageRepository) CreateWithRecipients(ctx context.Context, msg *domain.Message, recipientIDs []uint) (*domain.Message, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(msg).Error; err != nil {
-			shared.Log.Error("create message with recipients failed",
-				zap.String("operation", "CreateWithRecipients"),
-				zap.Uint("senderID", msg.SenderID),
-				zap.String("content", msg.Content),
-				zap.String("mediaURL", msg.MediaURL),
-				zap.String("messageType", string(msg.MessageType)),
-				zap.Error(err))
-			return shared.ErrDatabaseOperation.WithDetails("create message with recipients failed").WithDetails(err.Error())
+			return shared.ErrDatabaseOperation.WithDetails("create message failed")
 		}
 
 		if len(recipientIDs) > 0 {
@@ -3183,14 +3198,7 @@ func (r *messageRepository) CreateWithRecipients(ctx context.Context, msg *domai
 				}
 			}
 			if err := tx.Create(&recipients).Error; err != nil {
-				shared.Log.Error("create message recipients failed",
-					zap.String("operation", "CreateWithRecipients"),
-					zap.Uint("senderID", msg.SenderID),
-					zap.String("content", msg.Content),
-					zap.String("mediaURL", msg.MediaURL),
-					zap.String("messageType", string(msg.MessageType)),
-					zap.Error(err))
-				return shared.ErrDatabaseOperation.WithDetails("create message recipients failed").WithDetails(err.Error())
+				return shared.ErrDatabaseOperation.WithDetails("create recipients failed")
 			}
 		}
 		return nil
@@ -3233,21 +3241,14 @@ func (r *messageRepository) FindConversation(ctx context.Context, user1ID, user2
 	var messages []domain.Message
 
 	q := r.db.WithContext(ctx).
-		Preload("Sender").
+		Joins("Sender").
 		Where("((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))",
-			user1ID, user2ID, user2ID, user1ID).
-		Where("deleted_at IS NULL")
+			user1ID, user2ID, user2ID, user1ID)
 
 	q = applyMessageQuery(q, query)
 
-	err := q.Find(&messages).Error
-	if err != nil {
-		shared.Log.Error("find conversation failed",
-			zap.String("operation", "FindConversation"),
-			zap.Uint("user1ID", user1ID),
-			zap.Uint("user2ID", user2ID),
-			zap.Error(err))
-		return nil, shared.ErrDatabaseOperation.WithDetails("find conversation failed").WithDetails(err.Error())
+	if err := q.Find(&messages).Error; err != nil {
+		return nil, shared.ErrDatabaseOperation.WithDetails("find conversation failed")
 	}
 	return messages, nil
 }
@@ -3317,24 +3318,22 @@ func (r *messageRepository) MarkAsDelivered(ctx context.Context, messageID uint)
 
 func (r *messageRepository) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Update message status if sender is viewing
+		now := time.Now().UTC()
+
+		// Update main message status
 		if err := tx.Model(&domain.Message{}).
 			Where("id = ?", messageID).
 			Updates(map[string]interface{}{
 				"status":  domain.StatusRead,
-				"read_at": time.Now().UTC(),
+				"read_at": now,
 			}).Error; err != nil {
-			shared.Log.Error("mark message as read failed",
-				zap.String("operation", "MarkAsRead"),
-				zap.Uint("messageID", messageID),
-				zap.Error(err))
-			return shared.ErrDatabaseOperation.WithDetails("mark message as read failed").WithDetails(err.Error())
+			return shared.ErrBadRequest.WithDetails("failed to update msg status").WithDetails(err.Error())
 		}
 
-		// Update recipient status for broadcasts
+		// Update recipient status if exists
 		return tx.Model(&domain.MessageRecipient{}).
 			Where("message_id = ? AND user_id = ?", messageID, recipientID).
-			Update("read_at", time.Now().UTC()).Error
+			Update("read_at", now).Error
 	})
 }
 
@@ -3375,16 +3374,24 @@ func (r *messageRepository) Update(ctx context.Context, messageID uint, recipien
 	})
 }
 
-func (r *messageRepository) Delete(ctx context.Context, messageID uint) error {
-	err := r.db.WithContext(ctx).Delete(&domain.Message{}, messageID).Error
-	if err != nil {
-		shared.Log.Error("delete message failed",
-			zap.String("operation", "Delete"),
-			zap.Uint("messageID", messageID),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("delete message failed").WithDetails(err.Error())
-	}
-	return nil
+func (r *messageRepository) Delete(ctx context.Context, messageID uint, userID uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Verify ownership
+		var count int64
+		if err := tx.Model(&domain.Message{}).
+			Where("id = ? AND (sender_id = ? OR recipient_id = ?)",
+				messageID, userID, userID).
+			Count(&count).Error; err != nil {
+			return shared.ErrBadRequest.WithDetails("message ownership check failed").WithDetails(err.Error())
+		}
+
+		if count == 0 {
+			return shared.ErrForbidden.WithDetails("message not owned by user")
+		}
+
+		// Delete message
+		return tx.Delete(&domain.Message{}, messageID).Error
+	})
 }
 
 // Helper function to apply query filters
@@ -3613,20 +3620,15 @@ func (r *userRepository) UpdateLastActiveAt(ctx context.Context, userID uint) er
 
 func (r *userRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
 	var user domain.User
-	err := r.db.WithContext(ctx).First(&user, userID).Error
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "password_hash", "last_active_at").
+		First(&user, userID).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		shared.Log.Debug("user not found",
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return nil, shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+		return nil, shared.ErrRecordNotFound.WithDetails("user not found")
 	}
 	if err != nil {
-		shared.Log.Error("find user by ID failed",
-			zap.String("operation", "FindByID"),
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return nil, shared.ErrDatabaseOperation.WithDetails("find user by ID failed").WithDetails(err.Error())
+		return nil, shared.ErrDatabaseOperation.WithDetails("find user failed")
 	}
 	return &user, nil
 }
@@ -3738,18 +3740,17 @@ func (r *userRepository) emailExists(tx *gorm.DB, email string, excludeID uint) 
 }
 
 func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
-	err := r.db.WithContext(ctx).
-		Model(&domain.User{}).
-		Where("id = ?", userID).
-		Update("password_hash", passwordHash).Error
-	if err != nil {
-		shared.Log.Error("update password failed",
-			zap.String("operation", "UpdatePassword"),
-			zap.Uint("userID", userID),
-			zap.Error(err))
-		return shared.ErrDatabaseOperation.WithDetails("update password failed").WithDetails(err.Error())
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user domain.User
+		if err := tx.Select("id").First(&user, userID).Error; err != nil {
+			return shared.ErrRecordNotFound.WithDetails("user not found").WithDetails(err.Error())
+		}
+
+		if err := tx.Model(&user).Update("password_hash", passwordHash).Error; err != nil {
+			return shared.ErrDatabaseOperation.WithDetails("update password failed").WithDetails(err.Error())
+		}
+		return nil
+	})
 }
 
 
@@ -3761,6 +3762,7 @@ func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwo
 package realtime
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/gofiber/contrib/websocket"
@@ -3773,6 +3775,10 @@ type ConnectionWrapper struct {
 }
 
 func (w *ConnectionWrapper) WriteJSON(v interface{}) error {
+	if w == nil || w.conn == nil {
+		return errors.New("nil connection")
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.conn.WriteJSON(v)
@@ -3796,7 +3802,9 @@ package realtime
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/AmeerHeiba/chatting-service/internal/domain"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
@@ -3808,28 +3816,58 @@ import (
 type WebSocketNotifier struct {
 	clients   map[uint]*ConnectionWrapper
 	clientsMu sync.Mutex
+	logger    *zap.Logger
 }
 
 func NewWebSocketNotifier() *WebSocketNotifier {
 	return &WebSocketNotifier{
 		clients: make(map[uint]*ConnectionWrapper),
+		logger:  shared.Log,
 	}
 }
 
 func (w *WebSocketNotifier) Notify(ctx context.Context, message *domain.Message) error {
-	shared.Log.Debug("Broadcasting message", zap.Any("message", message))
+	if message == nil {
+		return errors.New("nil message")
+	}
+
 	if message.RecipientID == nil {
-		return domain.ErrInvalidRecipient
+		return errors.New("message has no recipient")
 	}
 
 	w.clientsMu.Lock()
-	defer w.clientsMu.Unlock()
+	conn, ok := w.clients[*message.RecipientID]
+	w.clientsMu.Unlock()
 
-	if conn, ok := w.clients[*message.RecipientID]; ok {
-		shared.Log.Debug("Sending message", zap.Any("message", message), zap.Uint("recipientID", *message.RecipientID))
-		return conn.WriteJSON(message)
+	if !ok {
+		w.logger.Debug("recipient not connected",
+			zap.Uint("recipientID", *message.RecipientID))
+		return nil
 	}
-	return nil
+
+	wsMessage := struct {
+		ID          uint      `json:"id"`
+		Content     string    `json:"content"`
+		MessageType string    `json:"message_type"`
+		Status      string    `json:"status"`
+		SenderID    uint      `json:"sender_id"`
+		RecipientID uint      `json:"recipient_id"`
+		SentAt      time.Time `json:"sent_at"`
+	}{
+		ID:          message.ID,
+		Content:     message.Content,
+		MessageType: string(message.MessageType),
+		Status:      string(message.Status),
+		SenderID:    message.SenderID,
+		RecipientID: *message.RecipientID,
+		SentAt:      message.SentAt,
+	}
+
+	w.logger.Debug("sending websocket message",
+		zap.Uint("messageID", message.ID),
+		zap.Uint("recipientID", *message.RecipientID))
+
+	return conn.WriteJSON(wsMessage)
 }
 
 func (w *WebSocketNotifier) Broadcast(ctx context.Context, message *domain.Message, recipientIDs []uint) error {
@@ -3852,18 +3890,29 @@ func (w *WebSocketNotifier) RegisterClient(userID uint, conn *websocket.Conn) {
 	w.clientsMu.Lock()
 	defer w.clientsMu.Unlock()
 	w.clients[userID] = &ConnectionWrapper{conn: conn}
+	shared.Log.Info("WebSocket client registered",
+		zap.Uint("userID", userID),
+		zap.Int("activeConnections", len(w.clients)))
 }
 
 func (w *WebSocketNotifier) RemoveClient(userID uint) {
 	w.clientsMu.Lock()
 	defer w.clientsMu.Unlock()
 	delete(w.clients, userID)
+	shared.Log.Info("WebSocket client removed",
+		zap.Uint("userID", userID),
+		zap.Int("activeConnections", len(w.clients)))
 }
 
 func (w *WebSocketNotifier) Upgrade(c *fiber.Ctx) error {
 	if websocket.IsWebSocketUpgrade(c) {
+		c.Locals("allowed", true)
+		shared.Log.Debug("WebSocket upgrade requested",
+			zap.String("path", c.Path()),
+			zap.String("method", c.Method()))
 		return c.Next()
 	}
+	shared.Log.Warn("WebSocket upgrade failed - not a WebSocket request")
 	return fiber.ErrUpgradeRequired
 }
 
@@ -3871,25 +3920,53 @@ func (w *WebSocketNotifier) HandleConnection(conn *websocket.Conn) {
 	userID := conn.Locals("userID").(uint)
 
 	// Register connection
-	w.RegisterClient(userID, conn)
-	defer w.RemoveClient(userID)
+	wrapper := &ConnectionWrapper{conn: conn}
+	w.clientsMu.Lock()
+	w.clients[userID] = wrapper
+	w.clientsMu.Unlock()
 
-	// Heartbeat handling
+	w.logger.Info("websocket connection established",
+		zap.Uint("userID", userID),
+		zap.String("remoteAddr", conn.RemoteAddr().String()))
+
+	defer func() {
+		w.clientsMu.Lock()
+		delete(w.clients, userID)
+		w.clientsMu.Unlock()
+		conn.Close()
+		w.logger.Info("websocket connection closed",
+			zap.Uint("userID", userID))
+	}()
+
+	// Configure connection
+	conn.SetReadLimit(512)
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	// Heartbeat
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	// Keep connection alive
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
 		}
 	}
-}
-
-func (w *WebSocketNotifier) Subscribe(ctx context.Context, userID uint) (<-chan *domain.Message, error) {
-	// Return a channel that will never receive messages
-	return nil, nil
-}
-
-func (w *WebSocketNotifier) Unsubscribe(ctx context.Context, userID uint) error {
-	// No-op since we're not actually maintaining subscriptions
-	return nil
 }
 
 

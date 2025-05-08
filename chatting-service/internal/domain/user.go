@@ -13,7 +13,7 @@ type User struct {
 	gorm.Model
 	Username     string     `gorm:"uniqueIndex;size:50;not null"`
 	Email        string     `gorm:"uniqueIndex;size:100;not null"`
-	PasswordHash string     `gorm:"type:text;not null"`
+	PasswordHash string     `gorm:"type:text;not null";json:"-"`
 	LastActiveAt time.Time  `gorm:"index"`
 	Status       UserStatus `gorm:"type:user_status;default:'offline'"`
 

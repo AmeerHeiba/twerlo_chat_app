@@ -77,8 +77,12 @@ func (r *messageRepository) CreateWithTransaction(ctx context.Context, fn func(c
 func (r *messageRepository) FindByID(ctx context.Context, messageID uint) (*domain.Message, error) {
 	var message domain.Message
 	err := r.db.WithContext(ctx).
-		Preload("Sender").
-		Preload("Recipients").
+		Preload("Sender", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "username", "email", "status", "last_active_at")
+		}).
+		Preload("Recipients", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "username", "email", "status", "last_active_at")
+		}).
 		First(&message, messageID).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {

@@ -211,3 +211,19 @@ func toMessageResponse(m *domain.Message) message.MessageResponse {
 
 	return resp
 }
+
+func (h *MessageHandler) GetLoggedInUserConversations(c *fiber.Ctx) error {
+	claims := c.Locals("userClaims").(*domain.TokenClaims)
+
+	messages, err := h.messageService.GetMessageHistory(
+		c.Context(),
+		claims.UserID,
+		domain.MessageQuery{},
+	)
+	if err != nil {
+		shared.Log.Error("Failed to get conversation", zap.Error(err))
+		return err
+	}
+
+	return c.JSON(messages)
+}

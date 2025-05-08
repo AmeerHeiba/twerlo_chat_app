@@ -16,6 +16,7 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
@@ -39,11 +40,21 @@ func main() {
 	// Initialize core dependencies
 	db := initDB()
 	app := fiber.New()
+
 	shared.InitLogger(os.Getenv("APP_ENV"))
 	app.Use(recover.New(recover.Config{
 		EnableStackTrace:  true,
 		StackTraceHandler: stackTraceHandler,
 	}))
+
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "http://127.0.0.1:8081",
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, Access-Control-Allow-Origin",
+		AllowCredentials: true,
+		ExposeHeaders:    "Content-Length",
+	}))
+
 	app.Use(middleware.RequestContext())
 	app.Use(middleware.ErrorHandler)
 

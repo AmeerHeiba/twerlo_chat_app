@@ -10,7 +10,11 @@ func SetupMessageRoutes(app *fiber.App, handler *handlers.MessageHandler, wsHand
 
 	messageGroup.Post("/", handler.SendMessage)
 	messageGroup.Post("/broadcast", handler.SendBroadcast)
+	messageGroup.Get("/conversations", handler.GetLoggedInUserConversations)
 	messageGroup.Get("/conversation/:userID", handler.GetConversation)
 	messageGroup.Put("/:id/read", handler.MarkAsRead)
 	messageGroup.Delete("/:id", handler.DeleteMessage)
+
+	// Todo get all conversation for signed in user
+
 }

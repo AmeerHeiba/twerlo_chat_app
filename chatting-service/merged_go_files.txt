@@ -2607,7 +2607,7 @@ type User struct {
 	gorm.Model
 	Username     string     `gorm:"uniqueIndex;size:50;not null"`
 	Email        string     `gorm:"uniqueIndex;size:100;not null"`
-	PasswordHash string     `gorm:"type:text;not null"`
+	PasswordHash string     `gorm:"type:text;not null";json:"-"`
 	LastActiveAt time.Time  `gorm:"index"`
 	Status       UserStatus `gorm:"type:user_status;default:'offline'"`
 
@@ -3260,8 +3260,12 @@ func (r *messageRepository) CreateWithTransaction(ctx context.Context, fn func(c
 func (r *messageRepository) FindByID(ctx context.Context, messageID uint) (*domain.Message, error) {
 	var message domain.Message
 	err := r.db.WithContext(ctx).
-		Preload("Sender").
-		Preload("Recipients").
+		Preload("Sender", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "username", "email", "status", "last_active_at")
+		}).
+		Preload("Recipients", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "username", "email", "status", "last_active_at")
+		}).
 		First(&message, messageID).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -4285,5 +4289,272 @@ func InitLogger(env string) {
 
 
 // ===== END OF ./internal/shared/logger.go =====
+
+
+// FILE: ./internal/tests/integration_test/auth_handler_test.go
+
+package integration_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/AmeerHeiba/chatting-service/internal/tests/unit_test"
+	"github.com/gofiber/fiber/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+func TestAuthHandler_Register(t *testing.T) {
+	shared.InitLogger("test")
+
+	app := fiber.New()
+
+	// Setup mock dependencies
+	userRepo := &unit_test.MockUserRepository{}
+	tokenProvider := &unit_test.MockTokenProvider{}
+	userService := unit_test.NewUserService(userRepo)
+	authService := unit_test.NewAuthService(userRepo, userService, tokenProvider)
+	authHandler := unit_test.NewAuthHandler(authService)
+
+	app.Post("/register", authHandler.Register)
+
+	tests := []struct {
+		name        string
+		body        interface{}
+		statusCode  int
+		mockSetup   func()
+		expectedErr string
+	}{
+		{
+			name: "Success",
+			body: auth.RegisterRequest{
+				Username: "testuser",
+				Email:    "test@example.com",
+				Password: "password123",
+			},
+			mockSetup: func() {
+				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
+				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
+				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
+					Return(&domain.User{
+						ID:       1,
+						Username: "testuser",
+						Email:    "test@example.com",
+					}, nil)
+				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
+				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
+			},
+			statusCode: fiber.StatusOK,
+		},
+		// Add more test cases...
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.mockSetup != nil {
+				tt.mockSetup()
+			}
+
+			body, _ := json.Marshal(tt.body)
+			req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := app.Test(req)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.statusCode, resp.StatusCode)
+
+			if tt.expectedErr != "" {
+				var errResp shared.Error
+				json.NewDecoder(resp.Body).Decode(&errResp)
+				assert.Contains(t, errResp.Message, tt.expectedErr)
+			}
+
+			userRepo.AssertExpectations(t)
+			tokenProvider.AssertExpectations(t)
+		})
+	}
+}
+
+
+// ===== END OF ./internal/tests/integration_test/auth_handler_test.go =====
+
+
+// FILE: ./internal/tests/unit_test/auth_service_test.go
+
+package unit_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+type MockUserRepository struct {
+	mock.Mock
+}
+
+func (m *MockUserRepository) Create(ctx context.Context, userName, email, passwordHash string) (*domain.User, error) {
+	args := m.Called(ctx, userName, email, passwordHash)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
+	args := m.Called(ctx, username)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	args := m.Called(ctx, email)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) FindByUsername(ctx context.Context, username string) (*domain.User, error) {
+	args := m.Called(ctx, username)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) FindProfileByID(ctx context.Context, userID uint) (*domain.User, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) Update(ctx context.Context, userID uint, username, email string) error {
+	args := m.Called(ctx, userID, username, email)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
+	args := m.Called(ctx, userID, passwordHash)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateLastActiveAt(ctx context.Context, userID uint) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) Exists(ctx context.Context, userID uint) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+type MockTokenProvider struct {
+	mock.Mock
+}
+
+func (m *MockTokenProvider) GenerateToken(ctx context.Context, user *domain.User) (string, error) {
+	args := m.Called(ctx, user)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockTokenProvider) GenerateRefreshToken(ctx context.Context, user *domain.User) (string, error) {
+	args := m.Called(ctx, user)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockTokenProvider) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	args := m.Called(ctx, tokenString)
+	return args.Get(0).(*domain.TokenClaims), args.Error(1)
+}
+
+func (m *MockTokenProvider) ValidateRefreshToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	args := m.Called(ctx, tokenString)
+	return args.Get(0).(*domain.TokenClaims), args.Error(1)
+}
+
+func (m *MockTokenProvider) GetAccessExpiry() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+
+func (m *MockTokenProvider) GetRefreshExpiry() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+func TestAuthService_Register(t *testing.T) {
+	shared.InitLogger("test")
+
+	tests := []struct {
+		name        string
+		username    string
+		email       string
+		password    string
+		mockSetup   func(*MockUserRepository, *MockTokenProvider)
+		expected    *auth.AuthResponse
+		expectedErr error
+	}{
+		{
+			name:     "Success",
+			username: "testuser",
+			email:    "test@example.com",
+			password: "password123",
+			mockSetup: func(userRepo *MockUserRepository, tokenProvider *MockTokenProvider) {
+				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
+				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
+				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
+					Return(&domain.User{
+						Username: "testuser",
+						Email:    "test@example.com",
+					}, nil)
+				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
+				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
+			},
+			expected: &auth.AuthResponse{
+				AccessToken:  "access_token",
+				RefreshToken: "refresh_token",
+				TokenType:    "Bearer",
+				UserID:       1,
+				Username:     "testuser",
+				Email:        "test@example.com",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userRepo := &MockUserRepository{}
+			tokenProvider := &MockTokenProvider{}
+			userService := application.NewUserService(userRepo)
+
+			if tt.mockSetup != nil {
+				tt.mockSetup(userRepo, tokenProvider)
+			}
+
+			authService := application.NewAuthService(userRepo, userService, tokenProvider)
+			res, err := authService.Register(context.Background(), tt.username, tt.email, tt.password)
+
+			if tt.expectedErr != nil {
+				assert.ErrorIs(t, err, tt.expectedErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, res)
+			}
+
+			userRepo.AssertExpectations(t)
+			tokenProvider.AssertExpectations(t)
+		})
+	}
+}
+
+
+// ===== END OF ./internal/tests/unit_test/auth_service_test.go =====
 
 

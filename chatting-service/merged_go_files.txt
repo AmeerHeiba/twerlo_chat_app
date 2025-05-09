@@ -410,6 +410,178 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uint, currentPa
 // ===== END OF ./internal/application/auth_service.go =====
 
 
+// FILE: ./internal/application/auth_service_test.go
+
+package application
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+type MockUserRepository struct {
+	mock.Mock
+}
+
+func (m *MockUserRepository) Create(ctx context.Context, userName, email, passwordHash string) (*domain.User, error) {
+	args := m.Called(ctx, userName, email, passwordHash)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
+	args := m.Called(ctx, username)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	args := m.Called(ctx, email)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) FindByUsername(ctx context.Context, username string) (*domain.User, error) {
+	args := m.Called(ctx, username)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) FindProfileByID(ctx context.Context, userID uint) (*domain.User, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) Update(ctx context.Context, userID uint, username, email string) error {
+	args := m.Called(ctx, userID, username, email)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
+	args := m.Called(ctx, userID, passwordHash)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateLastActiveAt(ctx context.Context, userID uint) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) Exists(ctx context.Context, userID uint) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+type MockTokenProvider struct {
+	mock.Mock
+}
+
+func (m *MockTokenProvider) GenerateToken(ctx context.Context, user *domain.User) (string, error) {
+	args := m.Called(ctx, user)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockTokenProvider) GenerateRefreshToken(ctx context.Context, user *domain.User) (string, error) {
+	args := m.Called(ctx, user)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockTokenProvider) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	args := m.Called(ctx, tokenString)
+	return args.Get(0).(*domain.TokenClaims), args.Error(1)
+}
+
+func (m *MockTokenProvider) ValidateRefreshToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	args := m.Called(ctx, tokenString)
+	return args.Get(0).(*domain.TokenClaims), args.Error(1)
+}
+
+func (m *MockTokenProvider) GetAccessExpiry() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+
+func (m *MockTokenProvider) GetRefreshExpiry() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+func TestAuthService_Register(t *testing.T) {
+	shared.InitLogger("test")
+
+	tests := []struct {
+		name        string
+		username    string
+		email       string
+		password    string
+		mockSetup   func(*MockUserRepository, *MockTokenProvider)
+		expected    *auth.AuthResponse
+		expectedErr error
+	}{
+		{
+			name:     "Success",
+			username: "testuser",
+			email:    "test@example.com",
+			password: "password123",
+			mockSetup: func(userRepo *MockUserRepository, tokenProvider *MockTokenProvider) {
+				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
+				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
+				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
+					Return(&domain.User{
+						Username: "testuser",
+						Email:    "test@example.com",
+					}, nil)
+				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
+				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
+			},
+			expected: &auth.AuthResponse{
+				AccessToken:  "access_token",
+				RefreshToken: "refresh_token",
+				TokenType:    "Bearer",
+				UserID:       1,
+				Username:     "testuser",
+				Email:        "test@example.com",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userRepo := &MockUserRepository{}
+			tokenProvider := &MockTokenProvider{}
+			userService := NewUserService(userRepo)
+
+			if tt.mockSetup != nil {
+				tt.mockSetup(userRepo, tokenProvider)
+			}
+
+			authService := NewAuthService(userRepo, userService, tokenProvider)
+			res, err := authService.Register(context.Background(), tt.username, tt.email, tt.password)
+
+			if tt.expectedErr != nil {
+				assert.ErrorIs(t, err, tt.expectedErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, res)
+			}
+
+			userRepo.AssertExpectations(t)
+			tokenProvider.AssertExpectations(t)
+		})
+	}
+}
+
+
+// ===== END OF ./internal/application/auth_service_test.go =====
+
+
 // FILE: ./internal/application/media_service.go
 
 package application
@@ -758,6 +930,179 @@ func (s *MessageService) DeleteMessage(ctx context.Context, messageID uint, user
 
 
 // ===== END OF ./internal/application/message_service.go =====
+
+
+// FILE: ./internal/application/message_service_test.go
+
+package application
+
+import (
+	"context"
+	"io"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+type MockMessageRepository struct {
+	mock.Mock
+}
+
+func (m *MockMessageRepository) CreateWithRecipients(ctx context.Context, message *domain.Message, recipientIDs []uint) (*domain.Message, error) {
+	args := m.Called(ctx, message, recipientIDs)
+	return args.Get(0).(*domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) Create(ctx context.Context, senderID uint, content, mediaURL string, messageType domain.MessageType) (*domain.Message, error) {
+	args := m.Called(ctx, senderID, content, mediaURL, messageType)
+	return args.Get(0).(*domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error {
+	args := m.Called(ctx, messageID, recipientID, broadcasterID)
+	return args.Error(0)
+}
+
+func (m *MockMessageRepository) FindByID(ctx context.Context, messageID uint) (*domain.Message, error) {
+	args := m.Called(ctx, messageID)
+	return args.Get(0).(*domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) Delete(ctx context.Context, messageID uint, recipientID uint) error {
+	args := m.Called(ctx, messageID, recipientID)
+	return args.Error(0)
+}
+
+func (m *MockMessageRepository) FindBroadcasts(ctx context.Context, broadcasterID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	args := m.Called(ctx, broadcasterID, query)
+	return args.Get(0).([]domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) FindConversation(ctx context.Context, userID1, userID2 uint, query domain.MessageQuery) ([]domain.Message, error) {
+	args := m.Called(ctx, userID1, userID2, query)
+	return args.Get(0).([]domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) FindUserMessages(ctx context.Context, userID uint, query domain.MessageQuery) ([]domain.Message, error) {
+	args := m.Called(ctx, userID, query)
+	return args.Get(0).([]domain.Message), args.Error(1)
+}
+
+func (m *MockMessageRepository) MarkAsDelivered(ctx context.Context, messageID uint) error {
+	args := m.Called(ctx, messageID)
+	return args.Error(0)
+}
+
+func (m *MockMessageRepository) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
+	args := m.Called(ctx, messageID, recipientID)
+	return args.Error(0)
+}
+
+type MockMessageNotifier struct {
+	mock.Mock
+}
+
+func (m *MockMessageNotifier) Notify(ctx context.Context, message *domain.Message) error {
+	args := m.Called(ctx, message)
+	return args.Error(0)
+}
+
+func (m *MockMessageNotifier) Broadcast(ctx context.Context, message *domain.Message, recipientIDs []uint) error {
+	args := m.Called(ctx, message, recipientIDs)
+	return args.Error(0)
+}
+
+type MockMediaUploader struct {
+	mock.Mock
+}
+
+func (m *MockMediaUploader) Upload(ctx context.Context, userID uint, reader io.Reader, fileName, contentType string, fileSize int64) (*domain.MediaResponse, error) {
+	args := m.Called(ctx, userID, reader, fileName, contentType, fileSize)
+	return args.Get(0).(*domain.MediaResponse), args.Error(1)
+}
+
+func TestMessageService_SendDirectMessage(t *testing.T) {
+	shared.InitLogger("test")
+
+	tests := []struct {
+		name          string
+		senderID      uint
+		recipientID   uint
+		content       string
+		mediaURL      string
+		mockSetup     func(*MockMessageRepository, *MockUserRepository, *MockMessageNotifier)
+		expectedError error
+	}{
+		{
+			name:        "Success",
+			senderID:    1,
+			recipientID: 2,
+			content:     "Hello",
+			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
+				ur.On("Exists", mock.Anything, uint(2)).Return(true, nil)
+				mr.On("Create", mock.Anything, uint(1), "Hello", "", domain.MessageDirect).
+					Return(&domain.Message{Content: "Hello"}, nil)
+				mr.On("Update", mock.Anything, uint(1), mock.Anything, nil).Return(nil)
+				mr.On("FindByID", mock.Anything, uint(1)).Return(&domain.Message{Content: "Hello"}, nil)
+				mn.On("Notify", mock.Anything, mock.Anything).Return(nil)
+			},
+			expectedError: nil,
+		},
+		{
+			name:        "Recipient does not exist",
+			senderID:    1,
+			recipientID: 2,
+			content:     "Hello",
+			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
+				ur.On("Exists", mock.Anything, uint(2)).Return(false, nil)
+			},
+			expectedError: shared.ErrNotFound,
+		},
+		{
+			name:        "Empty content and media URL",
+			senderID:    1,
+			recipientID: 2,
+			content:     "",
+			mediaURL:    "",
+			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
+				ur.On("Exists", mock.Anything, uint(2)).Return(true, nil)
+			},
+			expectedError: shared.ErrValidation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := &MockMessageRepository{}
+			ur := &MockUserRepository{}
+			mn := &MockMessageNotifier{}
+			mu := &MockMediaUploader{}
+
+			if tt.mockSetup != nil {
+				tt.mockSetup(mr, ur, mn)
+			}
+
+			service := NewMessageService(mr, nil, ur, mn, mu)
+			_, err := service.SendDirectMessage(context.Background(), tt.senderID, tt.recipientID, tt.content, tt.mediaURL)
+
+			if tt.expectedError != nil {
+				assert.ErrorIs(t, err, tt.expectedError)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mr.AssertExpectations(t)
+			ur.AssertExpectations(t)
+			mn.AssertExpectations(t)
+		})
+	}
+}
+
+
+// ===== END OF ./internal/application/message_service_test.go =====
 
 
 // FILE: ./internal/application/user_service.go
@@ -4006,6 +4351,58 @@ func (w *WebSocketNotifier) HandleConnection(conn *websocket.Conn) {
 // ===== END OF ./internal/infrastructure/realtime/websocket.go =====
 
 
+// FILE: ./internal/infrastructure/realtime/websocket_test.go
+
+package realtime
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestWebSocketNotifier(t *testing.T) {
+	shared.InitLogger("test")
+
+	t.Run("Register and Notify", func(t *testing.T) {
+		notifier := NewWebSocketNotifier()
+
+		// Mock WebSocket connection
+		conn := &websocket.Conn{}
+		userID := uint(1)
+
+		// Register client
+		notifier.RegisterClient(userID, conn)
+
+		// Test notification
+		msg := &domain.Message{
+
+			Content:     "Test",
+			MessageType: domain.MessageDirect,
+			Status:      domain.StatusSent,
+			SenderID:    2,
+			RecipientID: &userID,
+			SentAt:      time.Now(),
+		}
+
+		err := notifier.Notify(context.Background(), msg)
+		assert.NoError(t, err)
+
+		// Cleanup
+		notifier.RemoveClient(userID)
+	})
+
+}
+
+
+// ===== END OF ./internal/infrastructure/realtime/websocket_test.go =====
+
+
 // FILE: ./internal/infrastructure/storage/local_storage.go
 
 package storage
@@ -4289,272 +4686,5 @@ func InitLogger(env string) {
 
 
 // ===== END OF ./internal/shared/logger.go =====
-
-
-// FILE: ./internal/tests/integration_test/auth_handler_test.go
-
-package integration_test
-
-import (
-	"bytes"
-	"encoding/json"
-	"net/http/httptest"
-	"testing"
-
-	"github.com/AmeerHeiba/chatting-service/internal/domain"
-	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
-	"github.com/AmeerHeiba/chatting-service/internal/tests/unit_test"
-	"github.com/gofiber/fiber/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-)
-
-func TestAuthHandler_Register(t *testing.T) {
-	shared.InitLogger("test")
-
-	app := fiber.New()
-
-	// Setup mock dependencies
-	userRepo := &unit_test.MockUserRepository{}
-	tokenProvider := &unit_test.MockTokenProvider{}
-	userService := unit_test.NewUserService(userRepo)
-	authService := unit_test.NewAuthService(userRepo, userService, tokenProvider)
-	authHandler := unit_test.NewAuthHandler(authService)
-
-	app.Post("/register", authHandler.Register)
-
-	tests := []struct {
-		name        string
-		body        interface{}
-		statusCode  int
-		mockSetup   func()
-		expectedErr string
-	}{
-		{
-			name: "Success",
-			body: auth.RegisterRequest{
-				Username: "testuser",
-				Email:    "test@example.com",
-				Password: "password123",
-			},
-			mockSetup: func() {
-				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
-				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
-				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
-					Return(&domain.User{
-						ID:       1,
-						Username: "testuser",
-						Email:    "test@example.com",
-					}, nil)
-				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
-				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
-			},
-			statusCode: fiber.StatusOK,
-		},
-		// Add more test cases...
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.mockSetup != nil {
-				tt.mockSetup()
-			}
-
-			body, _ := json.Marshal(tt.body)
-			req := httptest.NewRequest("POST", "/register", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, err := app.Test(req)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.statusCode, resp.StatusCode)
-
-			if tt.expectedErr != "" {
-				var errResp shared.Error
-				json.NewDecoder(resp.Body).Decode(&errResp)
-				assert.Contains(t, errResp.Message, tt.expectedErr)
-			}
-
-			userRepo.AssertExpectations(t)
-			tokenProvider.AssertExpectations(t)
-		})
-	}
-}
-
-
-// ===== END OF ./internal/tests/integration_test/auth_handler_test.go =====
-
-
-// FILE: ./internal/tests/unit_test/auth_service_test.go
-
-package unit_test
-
-import (
-	"context"
-	"testing"
-	"time"
-
-	"github.com/AmeerHeiba/chatting-service/internal/application"
-	"github.com/AmeerHeiba/chatting-service/internal/domain"
-	"github.com/AmeerHeiba/chatting-service/internal/dto/auth"
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-)
-
-type MockUserRepository struct {
-	mock.Mock
-}
-
-func (m *MockUserRepository) Create(ctx context.Context, userName, email, passwordHash string) (*domain.User, error) {
-	args := m.Called(ctx, userName, email, passwordHash)
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
-	args := m.Called(ctx, username)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
-	args := m.Called(ctx, email)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) FindByUsername(ctx context.Context, username string) (*domain.User, error) {
-	args := m.Called(ctx, username)
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) FindByID(ctx context.Context, userID uint) (*domain.User, error) {
-	args := m.Called(ctx, userID)
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) FindProfileByID(ctx context.Context, userID uint) (*domain.User, error) {
-	args := m.Called(ctx, userID)
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) Update(ctx context.Context, userID uint, username, email string) error {
-	args := m.Called(ctx, userID, username, email)
-	return args.Error(0)
-}
-
-func (m *MockUserRepository) UpdatePassword(ctx context.Context, userID uint, passwordHash string) error {
-	args := m.Called(ctx, userID, passwordHash)
-	return args.Error(0)
-}
-
-func (m *MockUserRepository) UpdateLastActiveAt(ctx context.Context, userID uint) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-func (m *MockUserRepository) Exists(ctx context.Context, userID uint) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-type MockTokenProvider struct {
-	mock.Mock
-}
-
-func (m *MockTokenProvider) GenerateToken(ctx context.Context, user *domain.User) (string, error) {
-	args := m.Called(ctx, user)
-	return args.String(0), args.Error(1)
-}
-
-func (m *MockTokenProvider) GenerateRefreshToken(ctx context.Context, user *domain.User) (string, error) {
-	args := m.Called(ctx, user)
-	return args.String(0), args.Error(1)
-}
-
-func (m *MockTokenProvider) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
-	args := m.Called(ctx, tokenString)
-	return args.Get(0).(*domain.TokenClaims), args.Error(1)
-}
-
-func (m *MockTokenProvider) ValidateRefreshToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
-	args := m.Called(ctx, tokenString)
-	return args.Get(0).(*domain.TokenClaims), args.Error(1)
-}
-
-func (m *MockTokenProvider) GetAccessExpiry() time.Duration {
-	args := m.Called()
-	return args.Get(0).(time.Duration)
-}
-
-func (m *MockTokenProvider) GetRefreshExpiry() time.Duration {
-	args := m.Called()
-	return args.Get(0).(time.Duration)
-}
-func TestAuthService_Register(t *testing.T) {
-	shared.InitLogger("test")
-
-	tests := []struct {
-		name        string
-		username    string
-		email       string
-		password    string
-		mockSetup   func(*MockUserRepository, *MockTokenProvider)
-		expected    *auth.AuthResponse
-		expectedErr error
-	}{
-		{
-			name:     "Success",
-			username: "testuser",
-			email:    "test@example.com",
-			password: "password123",
-			mockSetup: func(userRepo *MockUserRepository, tokenProvider *MockTokenProvider) {
-				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
-				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
-				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
-					Return(&domain.User{
-						Username: "testuser",
-						Email:    "test@example.com",
-					}, nil)
-				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
-				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
-			},
-			expected: &auth.AuthResponse{
-				AccessToken:  "access_token",
-				RefreshToken: "refresh_token",
-				TokenType:    "Bearer",
-				UserID:       1,
-				Username:     "testuser",
-				Email:        "test@example.com",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			userRepo := &MockUserRepository{}
-			tokenProvider := &MockTokenProvider{}
-			userService := application.NewUserService(userRepo)
-
-			if tt.mockSetup != nil {
-				tt.mockSetup(userRepo, tokenProvider)
-			}
-
-			authService := application.NewAuthService(userRepo, userService, tokenProvider)
-			res, err := authService.Register(context.Background(), tt.username, tt.email, tt.password)
-
-			if tt.expectedErr != nil {
-				assert.ErrorIs(t, err, tt.expectedErr)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, res)
-			}
-
-			userRepo.AssertExpectations(t)
-			tokenProvider.AssertExpectations(t)
-		})
-	}
-}
-
-
-// ===== END OF ./internal/tests/unit_test/auth_service_test.go =====
 
 

@@ -117,21 +117,25 @@ func TestAuthService_Register(t *testing.T) {
 			email:    "test@example.com",
 			password: "password123",
 			mockSetup: func(userRepo *MockUserRepository, tokenProvider *MockTokenProvider) {
+				// Setup all required mock expectations
 				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
 				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
 				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
 					Return(&domain.User{
+
 						Username: "testuser",
 						Email:    "test@example.com",
 					}, nil)
+
+				tokenProvider.On("GetAccessExpiry").Return(time.Hour)
 				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
 				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
 			},
 			expected: &auth.AuthResponse{
 				AccessToken:  "access_token",
 				RefreshToken: "refresh_token",
+				ExpiresIn:    3600, // 1 hour in seconds
 				TokenType:    "Bearer",
-				UserID:       1,
 				Username:     "testuser",
 				Email:        "test@example.com",
 			},

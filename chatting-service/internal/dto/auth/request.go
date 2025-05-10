@@ -1,14 +1,14 @@
 package auth
 
 type LoginRequest struct {
-	Username string `json:"username" validate:"required,min=3"`
-	Password string `json:"password" validate:"required,min=8"`
+	Username string `json:"username" validate:"required,min=3" example:"johndoe"`
+	Password string `json:"password" validate:"required,min=8" example:"Password123"`
 }
 
 type RegisterRequest struct {
-	Username string `json:"username" validate:"required,min=3"`
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=8"`
+	Username string `json:"username" validate:"required,min=3" example:"johndoe"`
+	Email    string `json:"email" validate:"required,email" example:"john@email.com"`
+	Password string `json:"password" validate:"required,min=8" example:"Password123"`
 }
 
 type RefreshRequest struct {
@@ -16,6 +16,6 @@ type RefreshRequest struct {
 }
 
 type ChangePasswordRequest struct {
-	CurrentPassword string `json:"current_password" validate:"required,min=8"`
-	NewPassword     string `json:"new_password" validate:"required,min=8"`
+	CurrentPassword string `json:"current_password" validate:"required,min=8" example:"Password123"`
+	NewPassword     string `json:"new_password" validate:"required,min=8" example:"NewPassword123"`
 }

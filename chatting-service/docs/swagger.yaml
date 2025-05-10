@@ -1,0 +1,551 @@
+basePath: /api
+definitions:
+  auth.AuthResponse:
+    properties:
+      access_token:
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+      email:
+        example: john@example.com
+        type: string
+      expires_in:
+        description: seconds
+        example: 3600
+        type: integer
+      refresh_token:
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+      token_type:
+        example: Bearer
+        type: string
+      user_id:
+        example: 1
+        type: integer
+      username:
+        example: johndoe
+        type: string
+    type: object
+  auth.ChangePasswordRequest:
+    properties:
+      current_password:
+        example: Password123
+        minLength: 8
+        type: string
+      new_password:
+        example: NewPassword123
+        minLength: 8
+        type: string
+    required:
+    - current_password
+    - new_password
+    type: object
+  auth.LoginRequest:
+    properties:
+      password:
+        example: Password123
+        minLength: 8
+        type: string
+      username:
+        example: johndoe
+        minLength: 3
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  auth.RegisterRequest:
+    properties:
+      email:
+        example: john@email.com
+        type: string
+      password:
+        example: Password123
+        minLength: 8
+        type: string
+      username:
+        example: johndoe
+        minLength: 3
+        type: string
+    required:
+    - email
+    - password
+    - username
+    type: object
+  domain.MediaResponse:
+    properties:
+      content_type:
+        type: string
+      expires_at:
+        description: For temporary URLs "future enhancment"
+        type: string
+      size:
+        type: integer
+      uploaded_at:
+        type: string
+      url:
+        type: string
+    type: object
+  message.BroadcastRequest:
+    properties:
+      content:
+        type: string
+      media_url:
+        type: string
+      recipient_ids:
+        items:
+          type: integer
+        minItems: 1
+        type: array
+    required:
+    - recipient_ids
+    type: object
+  message.ConversationResponse:
+    properties:
+      messages:
+        items:
+          $ref: '#/definitions/message.MessageResponse'
+        type: array
+      total:
+        type: integer
+    type: object
+  message.MessageResponse:
+    properties:
+      content:
+        type: string
+      delivered_at:
+        type: string
+      id:
+        type: integer
+      media_url:
+        type: string
+      read_at:
+        type: string
+      recipient_id:
+        type: integer
+      sender_id:
+        type: integer
+      sent_at:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+    type: object
+  message.SendRequest:
+    properties:
+      content:
+        type: string
+      media_url:
+        type: string
+      recipient_id:
+        type: integer
+      type:
+        enum:
+        - direct
+        - broadcast
+        type: string
+    required:
+    - type
+    type: object
+  shared.Error:
+    properties:
+      code:
+        description: Machine-readable code
+        type: string
+      details: {}
+      message:
+        description: Human-readable message
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: heibaameer@gmail.com
+    name: API Support
+  description: This is a chatting service API
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Chatting Service API
+  version: "1.0"
+paths:
+  /api/media/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a media file (JPEG, PNG, PDF) with a maximum size of 10MB.
+      parameters:
+      - description: Media File (JPEG, PNG, PDF)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Successfully uploaded
+          schema:
+            $ref: '#/definitions/domain.MediaResponse'
+        "400":
+          description: Bad request (missing or invalid file)
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Upload a media file
+      tags:
+      - Media
+  /api/messages:
+    post:
+      consumes:
+      - application/json
+      description: Send a direct message to another user
+      parameters:
+      - description: Direct message payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/message.SendRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/message.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Send direct message
+      tags:
+      - Messages
+  /api/messages/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a message by ID (only by the sender)
+      parameters:
+      - description: Message ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Delete message
+      tags:
+      - Messages
+  /api/messages/{id}/read:
+    put:
+      consumes:
+      - application/json
+      description: Mark a specific message as read by the logged-in user
+      parameters:
+      - description: Message ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Mark message as read
+      tags:
+      - Messages
+  /api/messages/broadcast:
+    post:
+      consumes:
+      - application/json
+      description: Send a message to multiple recipients
+      parameters:
+      - description: Broadcast message payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/message.BroadcastRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/message.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Send broadcast message
+      tags:
+      - Messages
+  /api/messages/conversation/{userID}:
+    get:
+      consumes:
+      - application/json
+      description: Get message history between the current user and another user
+      parameters:
+      - description: Recipient User ID
+        in: path
+        name: userID
+        required: true
+        type: integer
+      - description: Pagination limit
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination offset
+        in: query
+        name: offset
+        type: integer
+      - description: Filter messages before this date/time
+        in: query
+        name: before
+        type: string
+      - description: Filter messages after this date/time
+        in: query
+        name: after
+        type: string
+      - description: Filter by message type
+        in: query
+        name: message_type
+        type: string
+      - description: Filter by presence of media
+        in: query
+        name: has_media
+        type: boolean
+      - description: Filter by message status
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/message.ConversationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Get conversation
+      tags:
+      - Messages
+  /api/messages/conversations:
+    get:
+      consumes:
+      - application/json
+      description: Get all message history for the logged-in user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Get user conversations
+      tags:
+      - Messages
+  /auth/change-password:
+    post:
+      consumes:
+      - application/json
+      description: Authenticated user changes their password
+      parameters:
+      - description: Change Password Request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.ChangePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      security:
+      - ApiKeyAuth: []
+      summary: Change user password
+      tags:
+      - Auth
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate a user and get a JWT token
+      parameters:
+      - description: Login credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      summary: Login to the system
+      tags:
+      - Auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Register a new user with username, email, and password
+      parameters:
+      - description: Regesteration data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/shared.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/shared.Error'
+      summary: Register a new user
+      tags:
+      - Auth
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -19,6 +19,18 @@ func NewAuthHandler(authService *application.AuthService) *AuthHandler {
 	return &AuthHandler{authService: authService}
 }
 
+// Login godoc
+// @Summary      Login to the system
+// @Description  Authenticate a user and get a JWT token
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      auth.LoginRequest  true  "Login credentials"
+// @Success      200   {object}  auth.AuthResponse
+// @Failure      400   {object}  shared.Error
+// @Failure      401   {object}  shared.Error
+// @Failure      500   {object}  shared.Error
+// @Router       /auth/login [post]
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var body struct {
 		Username string `json:"username"`
@@ -44,6 +56,18 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+// Register godoc
+// @Summary      Register a new user
+// @Description  Register a new user with username, email, and password
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      auth.RegisterRequest  true  "Regesteration data"
+// @Success      200   {object}  auth.AuthResponse
+// @Failure      400   {object}  shared.Error
+// @Failure      422   {object}  shared.Error
+// @Failure      500   {object}  shared.Error
+// @Router       /auth/register [post]
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var body struct {
 		Username string `json:"username"`
@@ -81,6 +105,19 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+// ChangePassword godoc
+// @Summary      Change user password
+// @Description  Authenticated user changes their password
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        body  body  auth.ChangePasswordRequest  true  "Change Password Request"
+// @Success      200   {object}  map[string]string
+// @Failure      400   {object}  shared.Error
+// @Failure      401   {object}  shared.Error
+// @Failure      500   {object}  shared.Error
+// @Router       /auth/change-password [post]
 func (h *AuthHandler) ChangePassword(c *fiber.Ctx) error {
 	claims, ok := c.Locals("userClaims").(*domain.TokenClaims)
 	if !ok || claims == nil {

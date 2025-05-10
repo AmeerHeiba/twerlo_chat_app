@@ -17,6 +17,19 @@ func NewMessageHandler(messageService *application.MessageService) *MessageHandl
 	return &MessageHandler{messageService: messageService}
 }
 
+// SendMessage handles sending a direct message
+// @Summary Send direct message
+// @Description Send a direct message to another user
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body message.SendRequest true "Direct message payload"
+// @Success 200 {object} message.MessageResponse
+// @Failure 400 {object} shared.Error
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages [post]
 func (h *MessageHandler) SendMessage(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 
@@ -61,6 +74,19 @@ func (h *MessageHandler) SendMessage(c *fiber.Ctx) error {
 	return c.JSON(toMessageResponse(msg))
 }
 
+// SendBroadcast handles sending a message to multiple recipients
+// @Summary Send broadcast message
+// @Description Send a message to multiple recipients
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body message.BroadcastRequest true "Broadcast message payload"
+// @Success 200 {object} message.MessageResponse
+// @Failure 400 {object} shared.Error
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages/broadcast [post]
 func (h *MessageHandler) SendBroadcast(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 
@@ -91,6 +117,26 @@ func (h *MessageHandler) SendBroadcast(c *fiber.Ctx) error {
 	return c.JSON(toMessageResponse(msg))
 }
 
+// GetConversation retrieves conversation history with another user
+// @Summary Get conversation
+// @Description Get message history between the current user and another user
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param userID path int true "Recipient User ID"
+// @Param limit query int false "Pagination limit"
+// @Param offset query int false "Pagination offset"
+// @Param before query string false "Filter messages before this date/time"
+// @Param after query string false "Filter messages after this date/time"
+// @Param message_type query string false "Filter by message type"
+// @Param has_media query bool false "Filter by presence of media"
+// @Param status query string false "Filter by message status"
+// @Success 200 {object} message.ConversationResponse
+// @Failure 400 {object} shared.Error
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages/conversation/{userID} [get]
 func (h *MessageHandler) GetConversation(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	otherUserID, err := c.ParamsInt("userID")
@@ -131,6 +177,19 @@ func (h *MessageHandler) GetConversation(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
+// MarkAsRead marks a message as read
+// @Summary Mark message as read
+// @Description Mark a specific message as read by the logged-in user
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Message ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} shared.Error
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages/{id}/read [put]
 func (h *MessageHandler) MarkAsRead(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	messageID, err := c.ParamsInt("id")
@@ -153,6 +212,19 @@ func (h *MessageHandler) MarkAsRead(c *fiber.Ctx) error {
 	})
 }
 
+// DeleteMessage deletes a message
+// @Summary Delete message
+// @Description Delete a message by ID (only by the sender)
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Message ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} shared.Error
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages/{id} [delete]
 func (h *MessageHandler) DeleteMessage(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 	messageID, err := c.ParamsInt("id")
@@ -212,6 +284,17 @@ func toMessageResponse(m *domain.Message) message.MessageResponse {
 	return resp
 }
 
+// GetLoggedInUserConversations retrieves conversations of the logged-in user
+// @Summary Get user conversations
+// @Description Get all message history for the logged-in user
+// @Tags Messages
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200
+// @Failure 401 {object} shared.Error
+// @Failure 500 {object} shared.Error
+// @Router /api/messages/conversations [get]
 func (h *MessageHandler) GetLoggedInUserConversations(c *fiber.Ctx) error {
 	claims := c.Locals("userClaims").(*domain.TokenClaims)
 

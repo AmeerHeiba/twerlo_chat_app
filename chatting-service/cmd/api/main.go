@@ -14,10 +14,13 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
+
+	_ "github.com/AmeerHeiba/chatting-service/docs"
 	"github.com/AmeerHeiba/chatting-service/internal/shared"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	swagger "github.com/gofiber/swagger"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -31,6 +34,19 @@ func stackTraceHandler(c *fiber.Ctx, e interface{}) {
 	)
 }
 
+// @title Chatting Service API
+// @version 1.0
+// @description This is a chatting service API
+// @termsOfService http://swagger.io/terms/
+// @contact.name API Support
+// @contact.email heibaameer@gmail.com
+// @license.name Apache 2.0
+// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+// @host localhost:8080
+// @BasePath /api
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name Authorization
 func main() {
 	// Load environment
 	if err := godotenv.Load(); err != nil {
@@ -53,6 +69,12 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, Access-Control-Allow-Origin",
 		AllowCredentials: true,
 		ExposeHeaders:    "Content-Length",
+	}))
+
+	app.Static("/swagger", "./docs")
+	app.Get("/swagger/*", swagger.New(swagger.Config{
+		URL:         "/swagger/doc.json",
+		DeepLinking: false,
 	}))
 
 	app.Use(middleware.RequestContext())

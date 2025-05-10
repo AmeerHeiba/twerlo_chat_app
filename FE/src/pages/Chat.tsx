@@ -104,6 +104,53 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeContactId, user]);
 
+    useEffect(() => {
+    const unsubscribe = websocketService.onMessage((message: Message) => {
+      // Only add the message if it's from the active contact or to the current user
+      if (
+        (message.sender_id === activeContactId && message.recipient_id === user?.id) ||
+        (message.recipient_id === activeContactId && message.sender_id === user?.id)
+      ) {
+        setMessages((prevMessages) => [...prevMessages, message]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [activeContactId, user?.id]);
+
+    useEffect(() => {
+    if (isAuthenticated) {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        websocketService.connect(token);
+      }
+    }
+
+    return () => {
+      websocketService.disconnect();
+    };
+  }, [isAuthenticated]);
+
+    useEffect(() => {
+    const fetchConversation = async () => {
+      if (activeContactId) {
+        setIsLoading(true);
+        try {
+          const convo = await api.messages.getConversation(activeContactId);
+          setMessages(convo.messages);
+        } catch (error) {
+          console.error("Failed to fetch conversation:", error);
+          toast.error("Failed to load messages");
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchConversation();
+  }, [activeContactId]);
+
+
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     scrollToBottom();

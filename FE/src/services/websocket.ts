@@ -8,7 +8,7 @@ class WebSocketService {
   private messageHandlers: MessageHandler[] = [];
   private connectionHandlers: ConnectionChangeHandler[] = [];
   private reconnectTimeout: number | null = null;
-  private url: string = "ws://127.0.0.1:8080/ws"; // Replace with your actual WebSocket endpoint
+  private url: string = "ws://localhost:8080/ws"; // Replace with your actual WebSocket endpoint
 
   constructor() {
     this.connect = this.connect.bind(this);

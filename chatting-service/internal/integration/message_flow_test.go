@@ -9,7 +9,6 @@ import (
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
 	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/gorm"
 )
 
 func TestMessageFlow(t *testing.T) {
@@ -69,12 +68,4 @@ func TestMessageFlow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, domain.StatusRead, updatedMsg.Status)
 	assert.NotNil(t, updatedMsg.ReadAt)
-}
-
-func setupTestDB(t *testing.T) *gorm.DB {
-	// Initialize test database connection
-	// Run migrations
-	// Return clean DB instance
-	// (Implementation depends on your test setup)
-	return nil
 }

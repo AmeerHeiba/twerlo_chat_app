@@ -480,6 +480,11 @@ func (m *MockUserRepository) Exists(ctx context.Context, userID uint) (bool, err
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockUserRepository) GetAll(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 type MockTokenProvider struct {
 	mock.Mock
 }
@@ -531,21 +536,25 @@ func TestAuthService_Register(t *testing.T) {
 			email:    "test@example.com",
 			password: "password123",
 			mockSetup: func(userRepo *MockUserRepository, tokenProvider *MockTokenProvider) {
+				// Setup all required mock expectations
 				userRepo.On("ExistsByUsername", mock.Anything, "testuser").Return(false, nil)
 				userRepo.On("ExistsByEmail", mock.Anything, "test@example.com").Return(false, nil)
 				userRepo.On("Create", mock.Anything, "testuser", "test@example.com", mock.Anything).
 					Return(&domain.User{
+
 						Username: "testuser",
 						Email:    "test@example.com",
 					}, nil)
+
+				tokenProvider.On("GetAccessExpiry").Return(time.Hour)
 				tokenProvider.On("GenerateToken", mock.Anything, mock.Anything).Return("access_token", nil)
 				tokenProvider.On("GenerateRefreshToken", mock.Anything, mock.Anything).Return("refresh_token", nil)
 			},
 			expected: &auth.AuthResponse{
 				AccessToken:  "access_token",
 				RefreshToken: "refresh_token",
+				ExpiresIn:    3600, // 1 hour in seconds
 				TokenType:    "Bearer",
-				UserID:       1,
 				Username:     "testuser",
 				Email:        "test@example.com",
 			},
@@ -689,6 +698,107 @@ func generateRandomString(length int) (string, error) {
 
 
 // ===== END OF ./internal/application/media_service.go =====
+
+
+// FILE: ./internal/application/media_service_upload_test.go
+
+package application
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/AmeerHeiba/chatting-service/internal/shared"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+type MockMediaStorage struct {
+	mock.Mock
+}
+
+func (m *MockMediaStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error) {
+	args := m.Called(ctx, file, filename, contentType, size)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaStorage) GetURL(ctx context.Context, path string) (string, error) {
+	args := m.Called(ctx, path)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaStorage) Delete(ctx context.Context, path string) error {
+	args := m.Called(ctx, path)
+	return args.Error(0)
+}
+
+func (m *MockMediaStorage) GetSignedURL(ctx context.Context, path string, duration time.Duration) (string, error) {
+	args := m.Called(ctx, path, duration)
+	return args.String(0), args.Error(1)
+}
+
+func TestMediaService_Upload(t *testing.T) {
+	tests := []struct {
+		name          string
+		fileSize      int64
+		contentType   string
+		mockSetup     func(*MockMediaStorage)
+		expectedError error
+	}{
+		{
+			name:        "ValidUpload",
+			fileSize:    5 * 1024 * 1024, // 5MB
+			contentType: "image/jpeg",
+			mockSetup: func(ms *MockMediaStorage) {
+				ms.On("Upload", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+					Return("user_1/test.jpg", nil)
+				ms.On("GetURL", mock.Anything, "user_1/test.jpg").
+					Return("http://example.com/user_1/test.jpg", nil)
+			},
+			expectedError: nil,
+		},
+		{
+			name:          "FileTooLarge",
+			fileSize:      11 * 1024 * 1024, // 11MB
+			contentType:   "image/jpeg",
+			mockSetup:     func(ms *MockMediaStorage) {},
+			expectedError: shared.ErrValidation.WithDetails("file size exceeds 10MB limit"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := &MockMediaStorage{}
+			if tt.mockSetup != nil {
+				tt.mockSetup(storage)
+			}
+
+			service := NewMediaService(storage)
+			file := bytes.NewBufferString("test file content")
+
+			_, err := service.Upload(
+				context.WithValue(context.Background(), "userID", uint(1)),
+				uint(1),
+				file,
+				"test.jpg",
+				tt.contentType,
+				tt.fileSize,
+			)
+
+			if tt.expectedError != nil {
+				assert.ErrorIs(t, err, tt.expectedError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+
+// ===== END OF ./internal/application/media_service_upload_test.go =====
 
 
 // FILE: ./internal/application/message_service.go
@@ -932,179 +1042,6 @@ func (s *MessageService) DeleteMessage(ctx context.Context, messageID uint, user
 // ===== END OF ./internal/application/message_service.go =====
 
 
-// FILE: ./internal/application/message_service_test.go
-
-package application
-
-import (
-	"context"
-	"io"
-	"testing"
-
-	"github.com/AmeerHeiba/chatting-service/internal/domain"
-	"github.com/AmeerHeiba/chatting-service/internal/shared"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-)
-
-type MockMessageRepository struct {
-	mock.Mock
-}
-
-func (m *MockMessageRepository) CreateWithRecipients(ctx context.Context, message *domain.Message, recipientIDs []uint) (*domain.Message, error) {
-	args := m.Called(ctx, message, recipientIDs)
-	return args.Get(0).(*domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) Create(ctx context.Context, senderID uint, content, mediaURL string, messageType domain.MessageType) (*domain.Message, error) {
-	args := m.Called(ctx, senderID, content, mediaURL, messageType)
-	return args.Get(0).(*domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) Update(ctx context.Context, messageID uint, recipientID *uint, broadcasterID *uint) error {
-	args := m.Called(ctx, messageID, recipientID, broadcasterID)
-	return args.Error(0)
-}
-
-func (m *MockMessageRepository) FindByID(ctx context.Context, messageID uint) (*domain.Message, error) {
-	args := m.Called(ctx, messageID)
-	return args.Get(0).(*domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) Delete(ctx context.Context, messageID uint, recipientID uint) error {
-	args := m.Called(ctx, messageID, recipientID)
-	return args.Error(0)
-}
-
-func (m *MockMessageRepository) FindBroadcasts(ctx context.Context, broadcasterID uint, query domain.MessageQuery) ([]domain.Message, error) {
-	args := m.Called(ctx, broadcasterID, query)
-	return args.Get(0).([]domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) FindConversation(ctx context.Context, userID1, userID2 uint, query domain.MessageQuery) ([]domain.Message, error) {
-	args := m.Called(ctx, userID1, userID2, query)
-	return args.Get(0).([]domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) FindUserMessages(ctx context.Context, userID uint, query domain.MessageQuery) ([]domain.Message, error) {
-	args := m.Called(ctx, userID, query)
-	return args.Get(0).([]domain.Message), args.Error(1)
-}
-
-func (m *MockMessageRepository) MarkAsDelivered(ctx context.Context, messageID uint) error {
-	args := m.Called(ctx, messageID)
-	return args.Error(0)
-}
-
-func (m *MockMessageRepository) MarkAsRead(ctx context.Context, messageID uint, recipientID uint) error {
-	args := m.Called(ctx, messageID, recipientID)
-	return args.Error(0)
-}
-
-type MockMessageNotifier struct {
-	mock.Mock
-}
-
-func (m *MockMessageNotifier) Notify(ctx context.Context, message *domain.Message) error {
-	args := m.Called(ctx, message)
-	return args.Error(0)
-}
-
-func (m *MockMessageNotifier) Broadcast(ctx context.Context, message *domain.Message, recipientIDs []uint) error {
-	args := m.Called(ctx, message, recipientIDs)
-	return args.Error(0)
-}
-
-type MockMediaUploader struct {
-	mock.Mock
-}
-
-func (m *MockMediaUploader) Upload(ctx context.Context, userID uint, reader io.Reader, fileName, contentType string, fileSize int64) (*domain.MediaResponse, error) {
-	args := m.Called(ctx, userID, reader, fileName, contentType, fileSize)
-	return args.Get(0).(*domain.MediaResponse), args.Error(1)
-}
-
-func TestMessageService_SendDirectMessage(t *testing.T) {
-	shared.InitLogger("test")
-
-	tests := []struct {
-		name          string
-		senderID      uint
-		recipientID   uint
-		content       string
-		mediaURL      string
-		mockSetup     func(*MockMessageRepository, *MockUserRepository, *MockMessageNotifier)
-		expectedError error
-	}{
-		{
-			name:        "Success",
-			senderID:    1,
-			recipientID: 2,
-			content:     "Hello",
-			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
-				ur.On("Exists", mock.Anything, uint(2)).Return(true, nil)
-				mr.On("Create", mock.Anything, uint(1), "Hello", "", domain.MessageDirect).
-					Return(&domain.Message{Content: "Hello"}, nil)
-				mr.On("Update", mock.Anything, uint(1), mock.Anything, nil).Return(nil)
-				mr.On("FindByID", mock.Anything, uint(1)).Return(&domain.Message{Content: "Hello"}, nil)
-				mn.On("Notify", mock.Anything, mock.Anything).Return(nil)
-			},
-			expectedError: nil,
-		},
-		{
-			name:        "Recipient does not exist",
-			senderID:    1,
-			recipientID: 2,
-			content:     "Hello",
-			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
-				ur.On("Exists", mock.Anything, uint(2)).Return(false, nil)
-			},
-			expectedError: shared.ErrNotFound,
-		},
-		{
-			name:        "Empty content and media URL",
-			senderID:    1,
-			recipientID: 2,
-			content:     "",
-			mediaURL:    "",
-			mockSetup: func(mr *MockMessageRepository, ur *MockUserRepository, mn *MockMessageNotifier) {
-				ur.On("Exists", mock.Anything, uint(2)).Return(true, nil)
-			},
-			expectedError: shared.ErrValidation,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mr := &MockMessageRepository{}
-			ur := &MockUserRepository{}
-			mn := &MockMessageNotifier{}
-			mu := &MockMediaUploader{}
-
-			if tt.mockSetup != nil {
-				tt.mockSetup(mr, ur, mn)
-			}
-
-			service := NewMessageService(mr, nil, ur, mn, mu)
-			_, err := service.SendDirectMessage(context.Background(), tt.senderID, tt.recipientID, tt.content, tt.mediaURL)
-
-			if tt.expectedError != nil {
-				assert.ErrorIs(t, err, tt.expectedError)
-			} else {
-				assert.NoError(t, err)
-			}
-
-			mr.AssertExpectations(t)
-			ur.AssertExpectations(t)
-			mn.AssertExpectations(t)
-		})
-	}
-}
-
-
-// ===== END OF ./internal/application/message_service_test.go =====
-
-
 // FILE: ./internal/application/user_service.go
 
 package application
@@ -1256,6 +1193,15 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID uint, username, 
 	}
 
 	return updatedProfile, nil
+}
+
+func (s *UserService) GettAllUsers(ctx context.Context) ([]*domain.User, error) {
+	users, err := s.userRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return users, nil
 }
 
 func (s *UserService) GetMessageHistory(ctx context.Context, userID uint, limit, offset int) ([]domain.Message, int64, error) {
@@ -1903,6 +1849,17 @@ func (h *UserHandler) GetMessageHistory(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
+func (h *UserHandler) GetAllUsers(c *fiber.Ctx) error {
+
+	users, err := h.userService.GettAllUsers(c.Context())
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(users)
+
+}
+
 
 // ===== END OF ./internal/delivery/http/handlers/user_handler.go =====
 
@@ -2265,6 +2222,7 @@ func SetupUserRoutes(app *fiber.App, handler *handlers.UserHandler, authMiddlewa
 	user.Get("/profile", handler.GetUserProfile)
 	user.Put("/profile", handler.UpdateProfile)
 	user.Get("/messages", handler.GetMessageHistory)
+	user.Get("/all", handler.GetAllUsers)
 
 }
 
@@ -2846,6 +2804,7 @@ type UserRepository interface {
 	Exists(ctx context.Context, userID uint) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
+	GetAll(ctx context.Context) ([]*User, error)
 }
 
 type MessageRepository interface {
@@ -4131,6 +4090,22 @@ func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwo
 	})
 }
 
+func (r *userRepository) GetAll(ctx context.Context) ([]*domain.User, error) {
+	var users []*domain.User
+
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "last_active_at", "status").
+		Find(&users).Error
+
+	if err != nil {
+		shared.Log.Error("get all users failed",
+			zap.String("operation", "GetAll"),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("get all users failed").WithDetails(err.Error())
+	}
+	return users, nil
+}
+
 
 // ===== END OF ./internal/infrastructure/database/user_repository.go =====
 
@@ -4486,6 +4461,420 @@ func (s *LocalStorage) GetSignedURL(ctx context.Context, path string, expires ti
 
 
 // ===== END OF ./internal/infrastructure/storage/local_storage.go =====
+
+
+// FILE: ./internal/integration/broadcast_messaging_test.go
+
+package integration
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestBroadcastMessaging(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := database.NewUserRepository(db)
+	messageRepo := database.NewMessageRepository(db)
+	messageRecipientRepo := database.NewMessageRecipientRepository(db)
+	notifier := realtime.NewWebSocketNotifier()
+
+	messageService := application.NewMessageService(
+		messageRepo,
+		messageRecipientRepo,
+		userRepo,
+		notifier,
+		nil,
+	)
+
+	// Create test users
+	broadcaster, err := userRepo.Create(context.Background(), "broadcaster", "broadcaster@test.com", "password")
+	assert.NoError(t, err)
+
+	var recipients []uint
+	for i := 0; i < 3; i++ {
+		user, err := userRepo.Create(context.Background(),
+			fmt.Sprintf("recipient%d", i),
+			fmt.Sprintf("recipient%d@test.com", i),
+			"password")
+		assert.NoError(t, err)
+		recipients = append(recipients, user.ID)
+	}
+
+	// Send broadcast
+	broadcastMsg, err := messageService.SendBroadcast(
+		context.Background(),
+		broadcaster.ID,
+		"Important announcement!",
+		"",
+		recipients,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, domain.MessageBroadcast, broadcastMsg.MessageType)
+
+	// Verify recipients
+	msgFromDB, err := messageRepo.FindByID(context.Background(), broadcastMsg.ID)
+	assert.NoError(t, err)
+	assert.Len(t, msgFromDB.Recipients, 3)
+}
+
+
+// ===== END OF ./internal/integration/broadcast_messaging_test.go =====
+
+
+// FILE: ./internal/integration/error_scenario_test.go
+
+package integration
+
+import (
+	"context"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestErrorScenarios(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := database.NewUserRepository(db)
+	messageRepo := database.NewMessageRepository(db)
+	messageRecipientRepo := database.NewMessageRecipientRepository(db)
+
+	messageService := application.NewMessageService(
+		messageRepo,
+		messageRecipientRepo,
+		userRepo,
+		nil,
+		nil,
+	)
+
+	t.Run("SendToNonexistentUser", func(t *testing.T) {
+		sender, err := userRepo.Create(context.Background(), "sender1", "sender1@test.com", "password")
+		assert.NoError(t, err)
+
+		_, err = messageService.SendDirectMessage(
+			context.Background(),
+			sender.ID,
+			9999, // non-existent user
+			"Hello",
+			"",
+		)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "user not found")
+	})
+
+	t.Run("EmptyMessage", func(t *testing.T) {
+		sender, err := userRepo.Create(context.Background(), "sender2", "sender2@test.com", "password")
+		assert.NoError(t, err)
+		recipient, err := userRepo.Create(context.Background(), "recipient2", "recipient2@test.com", "password")
+		assert.NoError(t, err)
+
+		_, err = messageService.SendDirectMessage(
+			context.Background(),
+			sender.ID,
+			recipient.ID,
+			"", // empty message
+			"", // no media
+		)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Invalid or empty message content")
+	})
+}
+
+
+// ===== END OF ./internal/integration/error_scenario_test.go =====
+
+
+// FILE: ./internal/integration/media_upload_flow_test.go
+
+package integration
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/storage"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestMediaUploadFlow(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := database.NewUserRepository(db)
+
+	// Setup storage
+	tempDir := t.TempDir()
+	storage := storage.NewLocalStorage(tempDir, "http://localhost:8080/media")
+	mediaService := application.NewMediaService(storage)
+
+	// Create test user
+	user, err := userRepo.Create(context.Background(), "mediauser", "media@test.com", "password")
+	assert.NoError(t, err)
+
+	// Create test file
+	fileContent := "test file content"
+	fileReader := strings.NewReader(fileContent)
+
+	// Upload media
+	ctx := context.WithValue(context.Background(), "userID", user.ID)
+	mediaResp, err := mediaService.Upload(
+		ctx,
+		user.ID,
+		fileReader,
+		"test.txt",
+		"text/plain",
+		int64(len(fileContent)),
+	)
+	assert.NoError(t, err)
+	assert.Contains(t, mediaResp.URL, "http://localhost:8080/media/user_")
+	assert.Equal(t, int64(len(fileContent)), mediaResp.Size)
+
+	// Verify file exists
+	filePath := filepath.Join(tempDir, strings.TrimPrefix(mediaResp.URL, "http://localhost:8080/media/"))
+	fileData, err := os.ReadFile(filePath)
+	assert.NoError(t, err)
+	assert.Equal(t, fileContent, string(fileData))
+}
+
+
+// ===== END OF ./internal/integration/media_upload_flow_test.go =====
+
+
+// FILE: ./internal/integration/message_flow_test.go
+
+package integration
+
+import (
+	"context"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/realtime"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestMessageFlow(t *testing.T) {
+	// Setup test database
+	db := setupTestDB(t)
+
+	// Initialize repositories
+	userRepo := database.NewUserRepository(db)
+	messageRepo := database.NewMessageRepository(db)
+	messageRecipientRepo := database.NewMessageRecipientRepository(db)
+
+	// Initialize services
+	notifier := realtime.NewWebSocketNotifier()
+	messageService := application.NewMessageService(
+		messageRepo,
+		messageRecipientRepo,
+		userRepo,
+		notifier,
+		nil, // no media uploader for this test
+	)
+
+	// Create test users
+	sender, err := userRepo.Create(context.Background(), "sender", "sender@test.com", "password")
+	assert.NoError(t, err)
+
+	recipient, err := userRepo.Create(context.Background(), "recipient", "recipient@test.com", "password")
+	assert.NoError(t, err)
+
+	// Test sending a message
+	msg, err := messageService.SendDirectMessage(
+		context.Background(),
+		sender.ID,
+		recipient.ID,
+		"Hello",
+		"",
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "Hello", msg.Content)
+
+	// Test retrieving conversation
+	messages, err := messageService.GetConversation(
+		context.Background(),
+		sender.ID,
+		recipient.ID,
+		domain.MessageQuery{Limit: 10},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, messages, 1)
+	assert.Equal(t, "Hello", messages[0].Content)
+
+	// Test marking as read
+	err = messageService.MarkAsRead(context.Background(), msg.ID, recipient.ID)
+	assert.NoError(t, err)
+
+	// Verify status updated
+	updatedMsg, err := messageRepo.FindByID(context.Background(), msg.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, domain.StatusRead, updatedMsg.Status)
+	assert.NotNil(t, updatedMsg.ReadAt)
+}
+
+
+// ===== END OF ./internal/integration/message_flow_test.go =====
+
+
+// FILE: ./internal/integration/test_setup_helper.go
+
+package integration
+
+import (
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/domain"
+	"gorm.io/gorm"
+)
+
+func setupTestDB(t *testing.T) *gorm.DB {
+	// Use test configuration
+	cfg := config.DBConfig{
+		Host:     "localhost",
+		Port:     "5433", // Use a different port for tests
+		User:     "postgres",
+		Password: "postgres",
+		DBName:   "chatting_service",
+		SSLMode:  "disable",
+	}
+
+	// Connect to database
+	db, err := config.NewDBConnection(cfg)
+	if err != nil {
+		t.Fatalf("Failed to connect to test database: %v", err)
+	}
+
+	// Clean database before each test
+	err = db.Exec("DROP SCHEMA public CASCADE").Error
+	if err != nil {
+		t.Fatalf("Failed to drop schema: %v", err)
+	}
+
+	err = db.Exec("CREATE SCHEMA public").Error
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Run migrations
+	err = runMigrations(db)
+	if err != nil {
+		t.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	// Return clean DB instance
+	return db
+}
+
+func runMigrations(db *gorm.DB) error {
+	// Same as your migrate/main.go but without logging
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"").Error; err != nil {
+		return err
+	}
+
+	enums := []string{
+		`CREATE TYPE message_status AS ENUM ('sent', 'delivered', 'read')`,
+		`CREATE TYPE user_status AS ENUM ('online', 'offline', 'away')`,
+		`CREATE TYPE message_type AS ENUM ('direct', 'broadcast')`,
+	}
+
+	for _, e := range enums {
+		if err := db.Exec(e).Error; err != nil {
+			return err
+		}
+	}
+
+	models := []interface{}{
+		&domain.User{},
+		&domain.Message{},
+		&domain.MessageRecipient{},
+	}
+
+	return db.AutoMigrate(models...)
+}
+
+
+// ===== END OF ./internal/integration/test_setup_helper.go =====
+
+
+// FILE: ./internal/integration/user_auth_flow_test.go
+
+package integration
+
+import (
+	"context"
+	"testing"
+
+	"github.com/AmeerHeiba/chatting-service/internal/application"
+	"github.com/AmeerHeiba/chatting-service/internal/config"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/auth"
+	"github.com/AmeerHeiba/chatting-service/internal/infrastructure/database"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestCompleteAuthFlow(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := database.NewUserRepository(db)
+	userService := application.NewUserService(userRepo)
+
+	authCfg := config.LoadAuthConfig()
+	jwtProvider := auth.NewJWTProvider(authCfg)
+	authService := application.NewAuthService(userRepo, userService, jwtProvider)
+
+	// Test registration
+	registerResp, err := authService.Register(
+		context.Background(),
+		"testuser",
+		"test@example.com",
+		"password123",
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, registerResp.AccessToken)
+	assert.NotEmpty(t, registerResp.RefreshToken)
+
+	// Test login
+	loginResp, err := authService.Login(
+		context.Background(),
+		"testuser",
+		"password123",
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, loginResp.AccessToken)
+
+	// Test token validation
+	claims, err := jwtProvider.ValidateToken(
+		context.Background(),
+		loginResp.AccessToken,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "testuser", claims.Username)
+
+	// Test refresh token
+	refreshResp, err := authService.Refresh(
+		context.Background(),
+		loginResp.RefreshToken,
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, refreshResp.AccessToken)
+	assert.NotEqual(t, loginResp.AccessToken, refreshResp.AccessToken)
+}
+
+
+// ===== END OF ./internal/integration/user_auth_flow_test.go =====
 
 
 // FILE: ./internal/shared/errors.go

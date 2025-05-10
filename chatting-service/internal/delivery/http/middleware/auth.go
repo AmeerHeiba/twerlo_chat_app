@@ -9,14 +9,23 @@ import (
 
 func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		// Check Authorization header first
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
+		var token string
+
+		if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		} else {
+			// Fallback to query parameter s
+			token = c.Query("token")
+		}
+
+		if token == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Authorization header missing",
+				"error": "Authorization token missing",
 			})
 		}
 
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := provider.ValidateToken(c.Context(), token)
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -24,7 +33,6 @@ func NewAuthMiddleware(provider domain.TokenProvider) fiber.Handler {
 			})
 		}
 
-		// Store userID in context for WebSocket handler
 		c.Locals("userID", claims.UserID)
 		c.Locals("userClaims", claims)
 

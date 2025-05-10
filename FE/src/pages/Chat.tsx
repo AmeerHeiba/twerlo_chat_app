@@ -161,24 +161,22 @@ useEffect(() => {
     setShowSidebar(!isMobile);
   }, [isMobile]);
 
-  const fetchMessages = async () => {
-    if (!activeContactId) return;
+const fetchMessages = async () => {
+  if (!activeContactId || !user) return;
 
-    setIsLoading(true);
-    try {
-      const response = await api.messages.getConversation(activeContactId);
-      // Sort messages by sent_at in ascending order
-      const sortedMessages = [...response.messages].sort(
-        (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
-      );
-      setMessages(sortedMessages);
-    } catch (error) {
-      console.error("Failed to fetch messages:", error);
-      toast.error("Failed to load conversation");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  try {
+    const response = await api.messages.getConversation(activeContactId);
+    // Sort by timestamp (newest first)
+    const sortedMessages = [...response.messages].sort(
+      (a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
+    );
+    setMessages(sortedMessages);
+  } catch (error) {
+    console.error("Failed to fetch messages:", error);
+    toast.error("Failed to load conversation");
+  }
+};
+
 
   const handleSendMessage = async (content: string, mediaUrl?: string) => {
     if (!activeContactId || (!content.trim() && !mediaUrl)) return;

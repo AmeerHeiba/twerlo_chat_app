@@ -92,11 +92,12 @@ getAll: async (): Promise<User[]> => {
   },
 
   messages: {
-    getConversation: async (userId: number): Promise<ConversationResponse> => {
+    getConversation: async (userId: number): Promise<{ messages: Message[] }> => {
       const response = await fetch(`${API_URL}/messages/conversation/${userId}`, {
         headers: getAuthHeaders(),
       });
-      return handleResponse(response);
+      const data = await handleResponse(response);
+      return { messages: data.messages }; // Keep the raw message array
     },
 
     sendMessage: async (

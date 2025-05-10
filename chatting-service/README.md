@@ -1,138 +1,243 @@
-# Chatting Service
+# 🗨️ Chatting Service API
 
-A real-time messaging platform built with Go, Fiber, and PostgreSQL implementing Clean Architecture.
+A real-time messaging platform built with **Go (Fiber)** for the backend and **React** for the frontend.
 
-## Features
+---
 
-- ✅ **User Authentication**: JWT-based auth with refresh tokens (implemented)
-- ✅ **Direct Messaging**: 1:1 conversations (implemented)
-- 🚧 **Broadcast Messaging**: Functional but needs WebSocket integration (in progress)
-- 🚧 **Media Support**: Model ready - storage service in development (planned)
-- ✅ **Transactional Safety**: Atomic operation guarantees (implemented)
-- 🚧 **Real-Time Updates**: Interfaces defined - WebSocket implementation planned
+## 🚀 Features
 
-## Architecture
-Presentation → Application → Domain ← Infrastructure
+### 🔐 Authentication
+- User registration with email/password
+- JWT-based authentication
+- Refresh token support
+- Password change functionality
 
-### Core Patterns
-- **Clean Architecture**: Domain-centric design
-- **Repository Pattern**: Persistence abstraction
-- **Transaction Management**: Cross-operation atomicity
+### 💬 Messaging
+- Direct 1:1 messaging
+- Broadcast messaging to multiple users
+- Message status tracking (sent/delivered/read)
+- Message history with pagination
+- Conversation threads
+- Message deletion
 
-## Folder Structure
-```
-/chatting-service
-├── /cmd
-│ └── /api
-│ └── main.go # App entry (dependency injection)
-├── /internal
-│ ├── /config # Env/config loading
-│ ├── /domain # Entities, value objects, repo interfaces
-│ ├── /infrastructure # External implementations
-│ │ ├── /database # PostgreSQL repositories
-│ │ └── /storage # (Planned) Filesystem/S3 storage
-│ ├── /application # Use cases/services
-│ ├── /delivery # Transport layers
-│ │ ├── /http # REST handlers (Fiber)
-│ │ └── /websocket # (Planned) Real-time handlers
-│ └── /shared # Common utilities (logging, errors)
-├── /migrations # Database schema changes
-├── go.mod # Go dependencies
-├── go.sum
-└── Dockerfile # Multi-stage build
-```
+### 📎 Media Handling
+- File uploads (JPEG, PNG, PDF)
+- 10MB max file size
+- Local storage with public URL access
 
-## Tech Stack
+### 🔄 Real-Time Features
+- WebSocket-based real-time updates
+- Online/offline status tracking
 
-| Component       | Technology          | Status        |
-|-----------------|---------------------|---------------|
-| Language        | Go 1.21+            | ✅ Implemented |
-| Web Framework   | Fiber v2            | ✅ Implemented |
-| Database        | PostgreSQL 14       | ✅ Implemented |
-| ORM             | GORM                | ✅ Implemented |
-| Real-Time       | (Planning)          | 🚧 Interfaces |
-| Error Handling  | Custom middleware   | ✅ Implemented |
+---
 
-## Key Components
+## 📡 API Endpoints
 
-### Domain Layer
-```go
-// Message repository interface
-type MessageRepository interface {
-    Create(ctx context.Context, senderID uint, content, mediaURL string, 
-           messageType MessageType) (*Message, error)
-    FindConversation(ctx context.Context, user1ID, user2ID uint, 
-                    query MessageQuery) ([]Message, error)
-    // ... actual implemented methods ...
-}
-```
+### 🧾 Authentication
+| Method | Endpoint              | Description                 |
+|--------|-----------------------|-----------------------------|
+| POST   | `/auth/login`         | User login                  |
+| POST   | `/auth/register`      | User registration           |
+| POST   | `/auth/change-password` | Change password (auth)    |
 
-### Transaction Management
-```go
-err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-    // Atomic operations
-    if err := tx.Create(&message).Error; err != nil {
-        return err
-    }
-    return tx.Create(&recipient).Error
-})
-```
-### Error Handling
+### 👤 Users
+| Method | Endpoint              | Description                 |
+|--------|-----------------------|-----------------------------|
+| GET    | `/api/users/profile`  | Get user profile            |
+| PUT    | `/api/users/profile`  | Update user profile         |
+| GET    | `/api/users/all`      | Get all users               |
 
-Structured error responses with:
-HTTP status codes
-Machine-readable error codes
-Contextual message
+### ✉️ Messages
+| Method | Endpoint                                     | Description                          |
+|--------|----------------------------------------------|--------------------------------------|
+| POST   | `/api/messages`                              | Send direct message                  |
+| POST   | `/api/messages/broadcast`                    | Send broadcast message               |
+| GET    | `/api/messages/conversation/{userID}`        | Get conversation with a user         |
+| GET    | `/api/messages/conversations`                | Get all user conversations           |
+| PUT    | `/api/messages/{id}/read`                    | Mark message as read                 |
+| DELETE | `/api/messages/{id}`                         | Delete message                       |
 
-## Getting Started
+### 🖼️ Media
+| Method | Endpoint              | Description                 |
+|--------|-----------------------|-----------------------------|
+| POST   | `/api/media/upload`   | Upload media file           |
 
-### Prerequisites
-- Docker 20.10+
-- Go 1.21+
-- Air (for live reload during development)
+### 🔌 WebSocket
+| Method | Endpoint              | Description                 |
+|--------|-----------------------|-----------------------------|
+| GET    | `/ws`                 | WebSocket connection        |
 
-### Installation
-1. Clone the repository:
+---
+
+## 🏗️ Architecture
+
+### Clean Architecture Layers
+
+#### **Domain**
+- Core business logic and entities
+- Models: `User`, `Message`, `Media`
+- Repository interfaces
+- Domain service interfaces
+
+#### **Application**
+- Use cases: `AuthService`, `MessageService`, `MediaService`, `UserService`
+
+#### **Infrastructure**
+- PostgreSQL repositories
+- JWT implementation
+- Local file storage
+- WebSocket notifier
+
+#### **Delivery**
+- REST API using Fiber
+- WebSocket handlers
+
+---
+
+## 🗃️ Database Schema
+
+- `Users` table
+- `Messages` table
+- `MessageRecipients` join table (for broadcast support)
+- PostgreSQL `ENUMs` for message types and status
+
+---
+
+## 💻 Frontend Application
+
+Located in `twerlo_chat_app/FE`.
+
+### 🧭 Running the Frontend
+
 ```bash
-   git clone https://github.com/AmeerHeiba/chatting-service.git
-   cd chatting-service
-```
-2. Setup environment:
-```bash
-    cp .env.example .env
-```
-3. Start services:
-```bash
-    docker-compose up --d postgres
-```
-4. Run migrations:
-```bash
-    go run migrate/main.go
-```
-5. Start development server:
-```bash
-    air
+cd twerlo_chat_app/FE
+npm install
+npm run dev
 ```
 
-## API Documentation
-Interactive Swagger docs available at http://localhost:8080/swagger when running locally.
+The frontend will run on: [http://127.0.0.1:8081](http://127.0.0.1:8081)
 
-## Development Workflow
-1. Start dependencies:
+---
+
+## ⚙️ Getting Started
+
+### 📋 Prerequisites
+
+- Docker `20.10+`
+- Go `1.21+`
+- Node.js `16+`
+- PostgreSQL `14`
+
+### 🛠️ Installation
+
 ```bash
-    docker-compose up -d postgres
-```
-2. Run application (with live reload):
-```bash
-    air
-```
-3. Run tests:
-```bash
-    go test ./...
+git clone https://github.com/AmeerHeiba/chatting-service.git
+cd chatting-service
+
+# Setup environment
+cp .env.example .env
+# Edit the .env file with your own configuration
+
+# Start database
+docker-compose up -d postgres
+
+# Run migrations
+go run cmd/migrate/main.go
+
+# Start backend server
+go run cmd/api/main.go
 ```
 
-## Planned Enhancements
-- WebSocket real-time messaging
-- Media upload service (local/S3)
-- Swagger API documentation
-- Advanced message status tracking
+In a separate terminal:
+
+```bash
+cd twerlo_chat_app/FE
+npm install
+npm run dev
+```
+
+---
+
+## 📄 API Documentation
+
+- Swagger is available at: [http://localhost:8080/swagger](http://localhost:8080/swagger)
+
+---
+
+## 🧪 Development Workflow
+
+### 🧬 Running Tests
+```bash
+go test ./...
+```
+
+### 🛠️ Code Generation (Swagger)
+
+Swagger docs are generated using [`swaggo/swag`](https://github.com/swaggo/swag):
+
+```bash
+swag init
+```
+
+---
+
+## 🔐 Environment Variables
+
+Example variables in `.env`:
+
+```env
+DB_HOST=localhost
+DB_PORT=5433
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_NAME=chatting_service
+
+JWT_SECRET=your-secret-key
+
+MEDIA_STORAGE_PATH=./uploads
+MEDIA_BASE_URL=http://localhost:8080/media
+```
+
+---
+
+## 🚢 Deployment
+
+### Docker
+
+```bash
+docker-compose up --build
+```
+
+### Kubernetes
+
+Helm charts – **coming soon**
+
+---
+
+## 📦 Postman Collection
+
+To test the API easily:
+
+1. **Import Collection:** `Twerlo chat app.postman_collection.json`
+2. **Import Environment:** `Twerlo-env.json`
+3. **Select the environment** from the dropdown
+4. **Login via `/api/auth/login`** to auto-fetch token
+5. Other requests will use the token automatically via `Bearer {{access_token}}`
+
+---
+
+## 📈 Planned Enhancements
+
+- Group messaging
+- Message reactions
+- End-to-end encryption
+- Push notifications
+- Media upload to cloud storage (e.g., S3)
+- Advanced message search
+
+---
+
+## 📬 Contact
+
+For questions or collaboration: **Ameer Heiba**  
+[GitHub](https://github.com/AmeerHeiba)

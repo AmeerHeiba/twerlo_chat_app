@@ -1,0 +1,632 @@
+{
+	"info": {
+		"_postman_id": "d300368b-500a-4457-8798-ef52928ad4ee",
+		"name": "Twerlo chat app",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "8410538"
+	},
+	"item": [
+		{
+			"name": "Health check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "127.0.0.1:8080/api/health",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"health"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Auth/Login",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n\"username\":\"test5\",\r\n\"password\":\"StrongPass123\"\r\n\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/auth/login",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"auth",
+						"login"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Auth/Register",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"email\":\"test5@gmail.com\",\r\n    \"username\":\"test5\",\r\n    \"password\":\"StrongPass123\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/auth/register",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"auth",
+						"register"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get Profile",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"url": {
+					"raw": "127.0.0.1:8080/api/users/profile",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"users",
+						"profile"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Update Profile",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2NjYwNjE1LCJpYXQiOjE3NDY2NTk3MTUsInVzZXJfaWQiOjEsInVzZXJuYW1lIjoidXNlcjEiLCJlbWFpbCI6InVzZXIxQGdtYWlsLmNvbSIsInNpZCI6Ik1ERFd0MzBYY0N6VHJwenJYNGJtSVBQMExkX1JBSk9tYURjVEEyM0JUNUU9In0.JNA7YX6QsxB7cYzOSO9e9ATyI13JiZSpFle7xJDgp7o",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"username\":\"user200\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/users/profile",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"users",
+						"profile"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Update Password",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2MzMwODMxLCJpYXQiOjE3NDYzMjk5MzEsInVzZXJfaWQiOjYsInVzZXJuYW1lIjoidXNlcjE0NCIsImVtYWlsIjoidXNlcjE0QGdtYWlsLmNvbSIsInNpZCI6IlN2anhGUFR0a0pJblVFNXpyb0YyUEp1SXZQSDJGQlRCNjB3eXYyY094c1k9In0.UtTNOXD7ut5OBSWQwpWFciogGSthHWF_2son1swFwBo",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"current_password\":\"securePassword123\",\r\n    \"new_password\":\"securePassword1234\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/auth/password",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"auth",
+						"password"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "New Message 1:1",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2ODg0OTA4LCJpYXQiOjE3NDY4ODQwMDgsInVzZXJfaWQiOjMsInVzZXJuYW1lIjoidGVzdDUiLCJlbWFpbCI6InRlc3Q1QGdtYWlsLmNvbSIsInNpZCI6ImtSY2xUc21qRk5XcjZfRTVPZkZ3b0FnWkljaVlZM1pQX1FoLUNvVXBRc1k9In0.VP4_g7ZPKVRc4HFXHJwNcM8qdOWfEDfXt2MHth7VX74",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"content\": \"hi there \",\r\n    \"type\": \"direct\",\r\n    \"recipient_id\":2\r\n    \r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "New Message 1:1 with Media",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2NDg1MTI2LCJpYXQiOjE3NDY0ODQyMjYsInVzZXJfaWQiOjEsInVzZXJuYW1lIjoidXNlcjEiLCJlbWFpbCI6InVzZXIxQGdtYWlsLmNvbSIsInNpZCI6ImFCN1hXTVNiOXljSTF4dUhGbjNoa3k3M05XZnh5OVJMYnlyN0hranhuQzA9In0.a3M3Qb8iZCJul7WIfaBqU6vdYJ0vdOyvbEvCJf04FLo",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n  \"content\": \"Check this out!\",\r\n  \"media_url\": \"/media/user_1\\\\1_1746484139431739000_mCc-vdya.jpg\",\r\n  \"recipient_id\": 2,\r\n  \"type\": \"direct\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "New Message Broadcast",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2Njc1ODUyLCJpYXQiOjE3NDY2NzQ5NTIsInVzZXJfaWQiOjE2LCJ1c2VybmFtZSI6InRlc3Q0IiwiZW1haWwiOiJ0ZXN0NEBnbWFpbC5jb20iLCJzaWQiOiJpZEVVTkRFbzNudUtIZmZhWEl0MFA3UkdiTWUzSkVhYUtITE5NZ2JGXzdrPSJ9.p8eFmsxRP8QZ91M7JUyHvKVMUOklKhI_4v9okHfgoJw",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"content\": \"Test Broadcast Message Test 1 to Broad \",\r\n    \"type\": \"broadcast\",\r\n    \"recipient_ids\":[17,15,16]\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages/broadcast",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages",
+						"broadcast"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get Conversation",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2ODg1NTQ4LCJpYXQiOjE3NDY4ODQ2NDgsInVzZXJfaWQiOjMsInVzZXJuYW1lIjoidGVzdDUiLCJlbWFpbCI6InRlc3Q1QGdtYWlsLmNvbSIsInNpZCI6InU0WGpKYmFld2M5b3R1NFFXR3NMMFNaQWJuUDJxRFZ5S3pmUllHV3NnV0U9In0.20xRQZK-_4LvufpKlurizTkuswmNPyAxGsJH4I79F38",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages/conversation/2",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages",
+						"conversation",
+						"2"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Mark MSG As Read",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2Mzg2MTA4LCJpYXQiOjE3NDYzODUyMDgsInVzZXJfaWQiOjEsInVzZXJuYW1lIjoidXNlcjEiLCJlbWFpbCI6InVzZXIxQGdtYWlsLmNvbSIsInNpZCI6Ims2SjFBVGplTVZWYmM0bEhaNVUySjJHYlhSNVBTQnVxdF9EZlR4VzFQUEE9In0.qK5LTywUQG4QjDtf7l11m8d4j8t4_C7fsPaTkbnnU3Q",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages/4/readw",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages",
+						"4",
+						"readw"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Upload Media File",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2NjYwNjE1LCJpYXQiOjE3NDY2NTk3MTUsInVzZXJfaWQiOjEsInVzZXJuYW1lIjoidXNlcjEiLCJlbWFpbCI6InVzZXIxQGdtYWlsLmNvbSIsInNpZCI6Ik1ERFd0MzBYY0N6VHJwenJYNGJtSVBQMExkX1JBSk9tYURjVEEyM0JUNUU9In0.JNA7YX6QsxB7cYzOSO9e9ATyI13JiZSpFle7xJDgp7o",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "file",
+							"type": "file",
+							"src": [
+								"/C:/Users/AmeerHeiba/OneDrive/Desktop/unnamed.jpg",
+								"/C:/Users/AmeerHeiba/OneDrive/Desktop/unnamed.jpg"
+							]
+						}
+					]
+				},
+				"url": {
+					"raw": "127.0.0.1:8080/api/media/upload",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"media",
+						"upload"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "get all users conversations",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2Njc1ODUyLCJpYXQiOjE3NDY2NzQ5NTIsInVzZXJfaWQiOjE2LCJ1c2VybmFtZSI6InRlc3Q0IiwiZW1haWwiOiJ0ZXN0NEBnbWFpbC5jb20iLCJzaWQiOiJpZEVVTkRFbzNudUtIZmZhWEl0MFA3UkdiTWUzSkVhYUtITE5NZ2JGXzdrPSJ9.p8eFmsxRP8QZ91M7JUyHvKVMUOklKhI_4v9okHfgoJw",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"url": {
+					"raw": "127.0.0.1:8080/api/messages/conversations",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"messages",
+						"conversations"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get all users",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{access_token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjaGF0dGluZy1zZXJ2aWNlIiwiZXhwIjoxNzQ2ODM2MDU0LCJpYXQiOjE3NDY4MzUxNTQsInVzZXJfaWQiOjE5LCJ1c2VybmFtZSI6IkFtZWVyIiwiZW1haWwiOiJhbWVlcl9tYXJvQHlhaG9vLmNvbSIsInNpZCI6IkN5dE5oQWQ2R2tmVkN3blNIbW5WVXJnNDR6SWwwTG9EQmxHd0dMVGdYTEk9In0.eDiDJdgned4YsRhjpdk0tPQyx5_zGEZkBdGTAS95Txo",
+						"type": "text",
+						"disabled": true
+					}
+				],
+				"url": {
+					"raw": "127.0.0.1:8080/api/users/all",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"users",
+						"all"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					"const response = pm.response.json();\r",
+					"\r",
+					"if (response.access_token) {\r",
+					"    pm.environment.set(\"access_token\", response.access_token);\r",
+					"}"
+				]
+			}
+		}
+	]
+}

@@ -10,5 +10,6 @@ func SetupUserRoutes(app *fiber.App, handler *handlers.UserHandler, authMiddlewa
 	user.Get("/profile", handler.GetUserProfile)
 	user.Put("/profile", handler.UpdateProfile)
 	user.Get("/messages", handler.GetMessageHistory)
+	user.Get("/all", handler.GetAllUsers)
 
 }

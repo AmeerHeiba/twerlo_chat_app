@@ -29,6 +29,7 @@ type UserRepository interface {
 	Exists(ctx context.Context, userID uint) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
+	GetAll(ctx context.Context) ([]*User, error)
 }
 
 type MessageRepository interface {

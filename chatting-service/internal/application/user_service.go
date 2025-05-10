@@ -149,6 +149,15 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID uint, username, 
 	return updatedProfile, nil
 }
 
+func (s *UserService) GettAllUsers(ctx context.Context) ([]*domain.User, error) {
+	users, err := s.userRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
 func (s *UserService) GetMessageHistory(ctx context.Context, userID uint, limit, offset int) ([]domain.Message, int64, error) {
 	// I'll implement this fully after I create the message logic
 	// For now just the signature

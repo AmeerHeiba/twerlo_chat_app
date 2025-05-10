@@ -254,3 +254,19 @@ func (r *userRepository) UpdatePassword(ctx context.Context, userID uint, passwo
 		return nil
 	})
 }
+
+func (r *userRepository) GetAll(ctx context.Context) ([]*domain.User, error) {
+	var users []*domain.User
+
+	err := r.db.WithContext(ctx).
+		Select("id", "username", "email", "last_active_at", "status").
+		Find(&users).Error
+
+	if err != nil {
+		shared.Log.Error("get all users failed",
+			zap.String("operation", "GetAll"),
+			zap.Error(err))
+		return nil, shared.ErrDatabaseOperation.WithDetails("get all users failed").WithDetails(err.Error())
+	}
+	return users, nil
+}

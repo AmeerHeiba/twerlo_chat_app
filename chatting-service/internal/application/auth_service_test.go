@@ -66,6 +66,11 @@ func (m *MockUserRepository) Exists(ctx context.Context, userID uint) (bool, err
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockUserRepository) GetAll(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 type MockTokenProvider struct {
 	mock.Mock
 }

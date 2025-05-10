@@ -101,3 +101,14 @@ func (h *UserHandler) GetMessageHistory(c *fiber.Ctx) error {
 
 	return c.JSON(response)
 }
+
+func (h *UserHandler) GetAllUsers(c *fiber.Ctx) error {
+
+	users, err := h.userService.GettAllUsers(c.Context())
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(users)
+
+}

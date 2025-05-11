@@ -59,6 +59,7 @@ func (h *MediaHandler) Upload(c *fiber.Ctx) error {
 		file.Filename,
 		file.Header.Get("Content-Type"),
 		file.Size,
+		claims.UserID,
 	)
 	if err != nil {
 		return err

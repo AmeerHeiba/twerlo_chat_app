@@ -24,7 +24,7 @@ func NewMediaService(storage domain.MediaStorage) *MediaService {
 	}
 }
 
-func (s *MediaService) Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64) (*domain.MediaResponse, error) {
+func (s *MediaService) Upload(ctx context.Context, userID uint, file io.Reader, filename string, contentType string, size int64, userId uint) (*domain.MediaResponse, error) {
 	// Validate file size
 	if size > 10*1024*1024 { // 10MB
 		shared.Log.Debug("file too large",
@@ -37,7 +37,7 @@ func (s *MediaService) Upload(ctx context.Context, userID uint, file io.Reader, 
 	uniqueFilename := generateUniqueFilename(userID, filename)
 
 	// Upload to storage
-	path, err := s.storage.Upload(ctx, file, uniqueFilename, contentType, size)
+	path, err := s.storage.Upload(ctx, file, uniqueFilename, contentType, size, userID)
 	if err != nil {
 		shared.Log.Error("failed to upload media",
 			zap.String("filename", filename),

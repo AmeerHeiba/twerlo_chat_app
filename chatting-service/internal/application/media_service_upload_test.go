@@ -16,7 +16,7 @@ type MockMediaStorage struct {
 	mock.Mock
 }
 
-func (m *MockMediaStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error) {
+func (m *MockMediaStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64, userId uint) (string, error) {
 	args := m.Called(ctx, file, filename, contentType, size)
 	return args.String(0), args.Error(1)
 }
@@ -82,6 +82,7 @@ func TestMediaService_Upload(t *testing.T) {
 				"test.jpg",
 				tt.contentType,
 				tt.fileSize,
+				uint(1),
 			)
 
 			if tt.expectedError != nil {

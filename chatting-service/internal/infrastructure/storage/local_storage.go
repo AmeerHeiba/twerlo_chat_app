@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,15 +24,15 @@ func NewLocalStorage(basePath, baseURL string) *LocalStorage {
 	}
 }
 
-func (s *LocalStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64) (string, error) {
+func (s *LocalStorage) Upload(ctx context.Context, file io.Reader, filename string, contentType string, size int64, userId uint) (string, error) {
 	// Get user ID from context
-	userID, ok := ctx.Value("userID").(uint)
-	if !ok {
-		return "", errors.New("user ID not found in context")
-	}
+	// userID, ok := ctx.Value("userID").(uint)
+	// if !ok {
+	// 	return "", errors.New("user ID not found in context")
+	// }
 
 	// Create user-specific directory
-	userPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", userID))
+	userPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", userId))
 	if err := os.MkdirAll(userPath, 0755); err != nil {
 		shared.Log.Error("failed to create user directory",
 			zap.String("path", userPath),
@@ -60,7 +59,7 @@ func (s *LocalStorage) Upload(ctx context.Context, file io.Reader, filename stri
 	}
 
 	// Return relative path in format "user_<ID>/filename"
-	return filepath.Join(fmt.Sprintf("user_%d", userID), filename), nil
+	return filepath.Join(fmt.Sprintf("user_%d", userId), filename), nil
 }
 
 func (s *LocalStorage) GetURL(ctx context.Context, path string) (string, error) {

@@ -39,6 +39,7 @@ func TestMediaUploadFlow(t *testing.T) {
 		"test.txt",
 		"text/plain",
 		int64(len(fileContent)),
+		uint(1),
 	)
 	assert.NoError(t, err)
 	assert.Contains(t, mediaResp.URL, "http://localhost:8080/media/user_")

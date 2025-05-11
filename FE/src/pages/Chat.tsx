@@ -13,8 +13,6 @@ import { Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { toast } from "sonner";
 
-
-
 const Chat = () => {
   const [isLoadingContacts, setIsLoadingContacts] = useState(false);
   const { id } = useParams<{ id: string }>();
@@ -36,35 +34,35 @@ const Chat = () => {
     (contact) => contact.id === activeContactId
   );
 
-useEffect(() => {
-  const fetchContacts = async () => {
-
-
-    if (!isAuthenticated) return;
+  useEffect(() => {
+    const fetchContacts = async () => {
+      if (!isAuthenticated) return;
 
       setIsLoadingContacts(true);
-    
-    try {
-      const users = await api.users.getAll();
-      setContacts(users);
-      
-      // Set first contact as active if none is selected
-      if (users.length > 0 && !activeContactId) {
-        setActiveContactId(users[0].id);
-      } else if (id) {
-        // Make sure the contact from URL params exists
-        const contactExists = users.some(user => user.id === parseInt(id, 10));
-        if (!contactExists && users.length > 0) {
+
+      try {
+        const users = await api.users.getAll();
+        setContacts(users);
+
+        // Set first contact as active if none is selected
+        if (users.length > 0 && !activeContactId) {
           setActiveContactId(users[0].id);
+        } else if (id) {
+          // Make sure the contact from URL params exists
+          const contactExists = users.some(
+            (user) => user.id === parseInt(id, 10)
+          );
+          if (!contactExists && users.length > 0) {
+            setActiveContactId(users[0].id);
+          }
         }
+      } catch (error) {
+        console.error("Failed to fetch contacts:", error);
+        toast.error("Failed to load contacts");
       }
-    } catch (error) {
-      console.error("Failed to fetch contacts:", error);
-      toast.error("Failed to load contacts");
-    }
-  };
-  fetchContacts();
-}, [isAuthenticated, activeContactId, id]);
+    };
+    fetchContacts();
+  }, [isAuthenticated, activeContactId, id]);
 
   useEffect(() => {
     // Handle WebSocket connection status
@@ -80,21 +78,80 @@ useEffect(() => {
     return () => unsubscribe();
   }, []);
 
-  // Handle WebSocket messages
   useEffect(() => {
-    const unsubscribe = websocketService.onMessage((newMessage) => {
-      if (
-        (newMessage.sender_id === activeContactId &&
-          newMessage.recipient_id === user?.id) ||
-        (newMessage.sender_id === user?.id &&
-          newMessage.recipient_id === activeContactId)
-      ) {
-        setMessages((prevMessages) => [...prevMessages, newMessage]);
-      }
+    if (!user?.id || !activeContactId) {
+      console.log(
+        "[WebSocket] Not setting up handler - missing user or contact"
+      );
+      return;
+    }
+
+    console.log("[WebSocket] Setting up message handler", {
+      userId: user.id,
+      activeContactId,
     });
 
-    return () => unsubscribe();
+    const messageHandler = (newMessage: Message) => {
+      // Force log to make sure handler is being called
+      console.log("[WebSocket] Raw message received:", {
+        message: newMessage,
+        activeContact: activeContactId,
+        userId: user.id,
+      });
+
+      // Rest of your message handling logic
+      const isRelevantMessage =
+        (newMessage.sender_id === activeContactId &&
+          newMessage.recipient_id === user.id) ||
+        (newMessage.sender_id === user.id &&
+          newMessage.recipient_id === activeContactId);
+
+      console.log("[WebSocket] Message relevant?", isRelevantMessage);
+
+      if (!isRelevantMessage) return;
+
+      setMessages((prevMessages) => {
+        if (prevMessages.some((msg) => msg.id === newMessage.id)) {
+          console.log("[WebSocket] Duplicate message detected");
+          return prevMessages;
+        }
+
+        console.log("[WebSocket] Adding new message");
+        return [...prevMessages, newMessage].sort(
+          (a, b) =>
+            new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+        );
+      });
+    };
+
+    const unsubscribe = websocketService.onMessage(messageHandler);
+
+    return () => {
+      console.log("[WebSocket] Cleaning up message handler");
+      unsubscribe();
+    };
   }, [activeContactId, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // Debug handler to log all incoming messages
+    const debugHandler = (message: Message) => {
+      console.log("[Chat Debug] Received message:", {
+        message,
+        currentUserId: user.id,
+        activeContactId,
+        isRelevant:
+          (message.sender_id === activeContactId &&
+            message.recipient_id === user.id) ||
+          (message.sender_id === user.id &&
+            message.recipient_id === activeContactId),
+      });
+    };
+
+    const unsubscribe = websocketService.onMessage(debugHandler);
+    return () => unsubscribe();
+  }, [user?.id, activeContactId]);
 
   // Fetch conversation when contact changes
   useEffect(() => {
@@ -104,52 +161,30 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeContactId, user]);
 
-    useEffect(() => {
-    const unsubscribe = websocketService.onMessage((message: Message) => {
-      // Only add the message if it's from the active contact or to the current user
-      if (
-        (message.sender_id === activeContactId && message.recipient_id === user?.id) ||
-        (message.recipient_id === activeContactId && message.sender_id === user?.id)
-      ) {
-        setMessages((prevMessages) => [...prevMessages, message]);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [activeContactId, user?.id]);
-
-    useEffect(() => {
+  useEffect(() => {
     if (isAuthenticated) {
       const token = localStorage.getItem("access_token");
       if (token) {
+        console.log("[WebSocket] Attempting to connect..."); // Debug log
         websocketService.connect(token);
+
+        // Add a one-time connection check
+        setTimeout(() => {
+          console.log(
+            "[WebSocket] Connection state:",
+            websocketService.isConnected()
+          );
+        }, 1000);
       }
     }
 
     return () => {
-      websocketService.disconnect();
-    };
-  }, [isAuthenticated]);
-
-    useEffect(() => {
-    const fetchConversation = async () => {
-      if (activeContactId) {
-        setIsLoading(true);
-        try {
-          const convo = await api.messages.getConversation(activeContactId);
-          setMessages(convo.messages);
-        } catch (error) {
-          console.error("Failed to fetch conversation:", error);
-          toast.error("Failed to load messages");
-        } finally {
-          setIsLoading(false);
-        }
+      if (isAuthenticated) {
+        console.log("[WebSocket] Disconnecting..."); // Debug log
+        websocketService.disconnect();
       }
     };
-
-    fetchConversation();
-  }, [activeContactId]);
-
+  }, [isAuthenticated]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -161,22 +196,21 @@ useEffect(() => {
     setShowSidebar(!isMobile);
   }, [isMobile]);
 
-const fetchMessages = async () => {
-  if (!activeContactId || !user) return;
+  const fetchMessages = async () => {
+    if (!activeContactId || !user) return;
 
-  try {
-    const response = await api.messages.getConversation(activeContactId);
-    // Sort by timestamp (newest first)
-    const sortedMessages = [...response.messages].sort(
-      (a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
-    );
-    setMessages(sortedMessages);
-  } catch (error) {
-    console.error("Failed to fetch messages:", error);
-    toast.error("Failed to load conversation");
-  }
-};
-
+    try {
+      const response = await api.messages.getConversation(activeContactId);
+      // Sort by timestamp (oldest first)
+      const sortedMessages = [...response.messages].sort(
+        (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+      );
+      setMessages(sortedMessages);
+    } catch (error) {
+      console.error("Failed to fetch messages:", error);
+      toast.error("Failed to load conversation");
+    }
+  };
 
   const handleSendMessage = async (content: string, mediaUrl?: string) => {
     if (!activeContactId || (!content.trim() && !mediaUrl)) return;
@@ -187,9 +221,18 @@ const fetchMessages = async () => {
         activeContactId,
         mediaUrl
       );
-      setMessages((prevMessages) => [...prevMessages, newMessage]);
+
+      // Update messages immediately with the new message
+      setMessages((prevMessages) => {
+        const updatedMessages = [...prevMessages, newMessage];
+        return updatedMessages.sort(
+          (a, b) =>
+            new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+        );
+      });
     } catch (error) {
       console.error("Failed to send message:", error);
+      toast.error("Failed to send message");
       throw error;
     }
   };
@@ -248,46 +291,42 @@ const fetchMessages = async () => {
             <Menu size={20} />
           </Button>
 
-{isLoadingContacts ? (
-  <div className="flex items-center gap-3">
-    <div className="h-9 w-9 rounded-full bg-muted animate-pulse"></div>
-    <div className="space-y-1">
-      <div className="h-4 w-24 bg-muted rounded animate-pulse"></div>
-      <div className="h-3 w-16 bg-muted rounded animate-pulse"></div>
-    </div>
-  </div>
-) : activeContact ? (
-  <div className="flex items-center gap-3">
-    <div className="relative">
-      <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center">
-        {activeContact.username?.charAt(0).toUpperCase() ?? "?"}
-      </div>
-      <span
-        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-background ${
-          activeContact.status === "online"
-            ? "bg-green-500"
-            : activeContact.status === "away"
-            ? "bg-yellow-500"
-            : "bg-gray-400"
-        }`}
-      ></span>
-    </div>
-    <div>
-      <h2 className="font-medium">{activeContact.username ?? "Unknown"}</h2>
-      <p className="text-xs text-muted-foreground">
-        {activeContact.status === "online"
-          ? "Online"
-          : activeContact.last_active
-          ? `Last seen ${new Date(activeContact.last_active).toLocaleTimeString()}`
-          : "Offline"}
-      </p>
-    </div>
-  </div>
-) : (
-  <div>
-    <h2 className="font-medium">Select a contact</h2>
-  </div>
-)}
+          {activeContact ? (
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center">
+                  {activeContact.username?.charAt(0).toUpperCase() ?? "?"}
+                </div>
+                <span
+                  className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-background ${
+                    activeContact.status === "online"
+                      ? "bg-green-500"
+                      : activeContact.status === "away"
+                      ? "bg-yellow-500"
+                      : "bg-gray-400"
+                  }`}
+                ></span>
+              </div>
+              <div>
+                <h2 className="font-medium">
+                  {activeContact.username ?? "Unknown"}
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {activeContact.status === "online"
+                    ? "Online"
+                    : activeContact.last_active
+                    ? `Last seen ${new Date(
+                        activeContact.last_active
+                      ).toLocaleTimeString()}`
+                    : "Offline"}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h2 className="font-medium">Select a contact</h2>
+            </div>
+          )}
         </header>
 
         {/* Messages Area */}

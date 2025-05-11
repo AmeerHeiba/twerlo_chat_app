@@ -8,7 +8,7 @@ class WebSocketService {
   private messageHandlers: MessageHandler[] = [];
   private connectionHandlers: ConnectionChangeHandler[] = [];
   private reconnectTimeout: number | null = null;
-  private url: string = "ws://localhost:8080/ws"; // Replace with your actual WebSocket endpoint
+  private url: string = "ws://localhost:8080/ws";
 
   constructor() {
     this.connect = this.connect.bind(this);
@@ -18,19 +18,13 @@ class WebSocketService {
   }
 
   connect(token: string) {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      return;
-    }
+    if (this.socket?.readyState === WebSocket.OPEN) return;
 
     try {
-      // Include token in the WebSocket URL or as a parameter
       this.socket = new WebSocket(`${this.url}?token=${token}`);
 
       this.socket.onopen = () => {
-        console.log("WebSocket connection established");
         this.notifyConnectionChange(true);
-
-        // Clear any reconnect timeout
         if (this.reconnectTimeout) {
           clearTimeout(this.reconnectTimeout);
           this.reconnectTimeout = null;
@@ -39,20 +33,21 @@ class WebSocketService {
 
       this.socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === "message") {
-            this.notifyMessageHandlers(data.payload as Message);
+          const messageData = JSON.parse(event.data);
+          if (
+            messageData.id &&
+            messageData.sender_id &&
+            messageData.recipient_id
+          ) {
+            this.notifyMessageHandlers(messageData as Message);
           }
         } catch (error) {
-          console.error("Error parsing WebSocket message:", error);
+          console.error("WebSocket message error:", error);
         }
       };
 
       this.socket.onclose = (event) => {
-        console.log("WebSocket connection closed", event.code, event.reason);
         this.notifyConnectionChange(false);
-
-        // Attempt to reconnect after a delay
         this.reconnectTimeout = window.setTimeout(() => {
           this.reconnect(token);
         }, 3000);
@@ -109,7 +104,13 @@ class WebSocketService {
   }
 
   private notifyMessageHandlers(message: Message) {
-    this.messageHandlers.forEach((handler) => handler(message));
+    this.messageHandlers.forEach((handler) => {
+      try {
+        handler(message);
+      } catch (error) {
+        console.error("Message handler error:", error);
+      }
+    });
   }
 
   private notifyConnectionChange(connected: boolean) {
@@ -121,5 +122,4 @@ class WebSocketService {
   }
 }
 
-// Create a singleton instance
 export const websocketService = new WebSocketService();
